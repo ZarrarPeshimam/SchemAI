@@ -1,0 +1,79 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom scrollbars for developer dashboard */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0d111a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #232d42;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3b82f6;
+}
+
+/* React Flow ERD theming (dark, understated) */
+.react-flow {
+  --xy-background-color: #090d14;
+  --xy-edge-stroke-default: #4a5b7d;
+  --xy-controls-button-background-color: #111622;
+  --xy-controls-button-background-color-hover: #1c2436;
+  --xy-controls-button-color: #a4b3ca;
+  --xy-controls-button-color-hover: #f1f5f9;
+  --xy-controls-button-border-color: #232d42;
+  --xy-minimap-background-color: #0d111a;
+  --xy-attribution-background-color: transparent;
+}
+
+.react-flow__node {
+  cursor: grab;
+}
+
+.react-flow__node.dragging {
+  cursor: grabbing;
+}
+
+.react-flow__controls {
+  box-shadow: none;
+  border: 1px solid #232d42;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.react-flow__controls-button svg {
+  fill: currentColor;
+}
+
+.react-flow__minimap {
+  border: 1px solid #232d42;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: none;
+}
+
+.react-flow__attribution {
+  font-size: 9px;
+  opacity: 0.5;
+}
+
+.react-flow__attribution a {
+  color: #7e8ea8;
+}
+
+.react-flow .erd-handle {
+  width: 7px;
+  height: 7px;
+  min-width: 0;
+  min-height: 0;
+  background: #2d3a54;
+  border: 1px solid #4a5b7d;
+}
