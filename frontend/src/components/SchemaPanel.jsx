@@ -3,25 +3,28 @@ import {
   Table, 
   GitFork, 
   CheckCircle2, 
-  ChevronRight, 
   Key, 
-  Hash, 
   Link2, 
   ShieldCheck,
-  AlertCircle
+  AlertCircle,
+  AlertTriangle
 } from 'lucide-react';
 import { MOCK_VALIDATIONS } from '../data/mockSchema';
 import { describeRelationshipKey, getEntity } from '../utils/schemaHelpers';
 
-export default function SchemaPanel({ schema, selectedEntityId, onSelectEntity }) {
+export default function SchemaPanel({ schema, selectedEntityId, onSelectEntity, validationData }) {
   const [activeTab, setActiveTab] = useState('entities');
-  const entities = schema.entities;
-  const relationships = schema.relationships;
+  const entities = schema?.entities || [];
+  const relationships = schema?.relationships || [];
+
+  const checksPassedCount = validationData?.summary
+    ? `${validationData.summary.checksPassed}/${validationData.summary.totalChecks}`
+    : `${MOCK_VALIDATIONS.length}/${MOCK_VALIDATIONS.length}`;
 
   const tabs = [
     { id: 'entities', label: 'Entities', count: entities.length, icon: Table },
     { id: 'relationships', label: 'Relationships', count: relationships.length, icon: GitFork },
-    { id: 'validation', label: 'Validation', count: `${MOCK_VALIDATIONS.length}/${MOCK_VALIDATIONS.length}`, icon: ShieldCheck },
+    { id: 'validation', label: 'Validation', count: checksPassedCount, icon: ShieldCheck },
   ];
 
   return (
@@ -161,32 +164,68 @@ export default function SchemaPanel({ schema, selectedEntityId, onSelectEntity }
 
         {/* 3. VALIDATION TAB */}
         {activeTab === 'validation' && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
-            {MOCK_VALIDATIONS.map((val) => (
-              <div
-                key={val.id}
-                className="bg-dark-950/80 border border-dark-750 rounded-md p-3 flex flex-col justify-between hover:border-emerald-500/40 transition-colors"
-              >
-                <div className="flex items-start space-x-2.5 mb-2">
-                  <div className="p-1 rounded bg-emerald-500/10 text-emerald-400 shrink-0 mt-0.5">
-                    <CheckCircle2 className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-medium text-dark-100 leading-snug">
-                      {val.message}
-                    </h4>
-                    <p className="text-[10px] text-dark-400 mt-1">
-                      {val.details}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="mt-2 pt-2 border-t border-dark-800 flex items-center justify-between text-[10px] font-mono">
-                  <span className="text-dark-500">{val.rule}</span>
-                  <span className="text-emerald-400 font-medium">Passed</span>
+          <div className="space-y-3">
+            {validationData?.errors?.length > 0 && (
+              <div className="space-y-2">
+                <h4 className="text-xs font-semibold text-rose-400 flex items-center space-x-1.5">
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  <span>Validation Errors ({validationData.errors.length})</span>
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {validationData.errors.map((err, idx) => (
+                    <div key={idx} className="bg-rose-950/20 border border-rose-900/40 rounded-md p-2.5 text-xs">
+                      <div className="font-semibold text-rose-300 font-mono text-[11px]">{err.code}</div>
+                      <div className="text-dark-300 text-[11px] mt-1">{err.message}</div>
+                    </div>
+                  ))}
                 </div>
               </div>
-            ))}
+            )}
+
+            {validationData?.warnings?.length > 0 && (
+              <div className="space-y-2">
+                <h4 className="text-xs font-semibold text-amber-400 flex items-center space-x-1.5">
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  <span>Validation Warnings ({validationData.warnings.length})</span>
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {validationData.warnings.map((warn, idx) => (
+                    <div key={idx} className="bg-amber-950/20 border border-amber-900/40 rounded-md p-2.5 text-xs">
+                      <div className="font-semibold text-amber-300 font-mono text-[11px]">{warn.code}</div>
+                      <div className="text-dark-300 text-[11px] mt-1">{warn.message}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+              {MOCK_VALIDATIONS.map((val) => (
+                <div
+                  key={val.id}
+                  className="bg-dark-950/80 border border-dark-750 rounded-md p-3 flex flex-col justify-between hover:border-emerald-500/40 transition-colors"
+                >
+                  <div className="flex items-start space-x-2.5 mb-2">
+                    <div className="p-1 rounded bg-emerald-500/10 text-emerald-400 shrink-0 mt-0.5">
+                      <CheckCircle2 className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-medium text-dark-100 leading-snug">
+                        {val.message}
+                      </h4>
+                      <p className="text-[10px] text-dark-400 mt-1">
+                        {val.details}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-2 pt-2 border-t border-dark-800 flex items-center justify-between text-[10px] font-mono">
+                    <span className="text-dark-500">{val.rule}</span>
+                    <span className="text-emerald-400 font-medium">Passed</span>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>

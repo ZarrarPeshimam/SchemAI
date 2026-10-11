@@ -46,7 +46,7 @@ export default function RequirementPanel({ onGenerate }) {
         <div className="flex flex-col space-y-3 pt-2">
           <button
             type="button"
-            onClick={onGenerate}
+            onClick={() => onGenerate && onGenerate(prompt)}
             className="w-full py-2.5 px-4 bg-brand-600 hover:bg-brand-500 active:bg-brand-700 text-white rounded-md text-xs font-semibold flex items-center justify-center space-x-2 transition-colors shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1 focus:ring-offset-dark-900"
           >
             <Sparkles className="w-4 h-4 text-blue-200" />
@@ -56,10 +56,10 @@ export default function RequirementPanel({ onGenerate }) {
           {/* Status / Info Section */}
           <div className="bg-dark-850/80 border border-dark-700/80 rounded-md p-3 flex items-center justify-between">
             <div className="flex items-center space-x-2">
-              <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+              <div className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></div>
               <div className="flex flex-col">
-                <span className="text-[11px] font-medium text-dark-200">AI-generated schema</span>
-                <span className="text-[10px] text-dark-400">Ready to generate</span>
+                <span className="text-[11px] font-medium text-dark-200">AI Generation (Phase 2)</span>
+                <span className="text-[10px] text-dark-400">Backend API Ready &bull; LLM In Next Phase</span>
               </div>
             </div>
             <div className="flex items-center space-x-1 text-[11px] text-dark-400 bg-dark-800 px-2 py-1 rounded border border-dark-700">
