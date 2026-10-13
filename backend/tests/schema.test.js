@@ -250,21 +250,8 @@ describe("SchemAI Backend API Suite", () => {
     assert.ok(body.error.message.includes("Cannot generate SQL from invalid schema"));
   });
 
-  // 10. Generation placeholder returns 501 Not Implemented
-  it("POST /api/schema/generate reports that AI generation is not yet implemented", async () => {
-    const res = await fetch(`${baseUrl}/schema/generate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        requirement: "Create a database for a library management system",
-      }),
-    });
-    assert.equal(res.status, 501);
-    const body = await res.json();
-    assert.equal(body.success, false);
-    assert.equal(body.error.code, "FEATURE_NOT_IMPLEMENTED");
-    assert.ok(body.error.message.includes("not yet implemented"));
-  });
+  // 10. (Generation endpoint tests live in tests/generate.test.js, which always injects a fake LLM client
+  //      so that no test can ever reach the real Gemini API.)
 
   // 11. Refinement placeholder returns 501 Not Implemented
   it("POST /api/schema/refine reports that schema refinement is not yet implemented", async () => {

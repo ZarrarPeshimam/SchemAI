@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Header from '../components/Header';
 import Sidebar from '../components/Sidebar';
 import RequirementPanel from '../components/RequirementPanel';
@@ -6,6 +6,7 @@ import ERDViewer from '../components/ERDViewer';
 import RefinementBar from '../components/RefinementBar';
 import SchemaPanel from '../components/SchemaPanel';
 import { api } from '../services/api';
+import { toGenerationError, validateRequirementInput } from '../utils/generation';
 import { AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
 
 export default function Dashboard() {
@@ -16,6 +17,13 @@ export default function Dashboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [validationData, setValidationData] = useState(null);
+
+  // AI generation workflow state
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generationError, setGenerationError] = useState(null);
+  const [lastGeneration, setLastGeneration] = useState(null);
+  const [schemaSource, setSchemaSource] = useState('sample'); // 'sample' | 'generated'
+  const generationInFlight = useRef(false); // guards against double submits before state re-renders
 
   const fetchSchemaFromBackend = useCallback(async () => {
     setIsLoading(true);
@@ -49,17 +57,44 @@ export default function Dashboard() {
   }, [fetchSchemaFromBackend]);
 
   const handleGenerate = async (requirementText) => {
-    try {
-      const res = await api.generateSchema(requirementText || 'e-commerce database');
-      if (res.data?.error?.message) {
-        setFeedbackNotice(res.data.error.message);
-      } else {
-        setFeedbackNotice('AI generation endpoint responded (Phase 2 feature).');
-      }
-    } catch {
-      setFeedbackNotice('AI generation endpoint unreachable.');
+    if (generationInFlight.current) return; // duplicate request while one is running
+
+    const inputError = validateRequirementInput(requirementText);
+    if (inputError) {
+      setGenerationError({ message: inputError, details: [] });
+      return;
     }
-    setTimeout(() => setFeedbackNotice(null), 4500);
+
+    generationInFlight.current = true;
+    setIsGenerating(true);
+    setGenerationError(null);
+
+    try {
+      const res = await api.generateSchema(requirementText.trim());
+      const payload = res.ok && res.data?.success ? res.data.data : null;
+
+      if (payload?.schema) {
+        // Replace the canonical schema state with the validated result from the backend.
+        setSchema(payload.schema);
+        setValidationData(payload.validation ?? null);
+        setSelectedEntityId(null);
+        setSchemaSource('generated');
+        setLastGeneration({
+          entityCount: payload.schema.entities.length,
+          relationshipCount: payload.schema.relationships.length,
+          repaired: !!payload.repaired,
+        });
+      } else {
+        // Keep whatever diagram is currently shown; surface the error instead of faking a result.
+        setGenerationError(toGenerationError(res));
+      }
+    } catch (e) {
+      console.error('Schema generation failed unexpectedly:', e);
+      setGenerationError({ message: 'Something went wrong while generating the schema. Please try again.', details: [] });
+    } finally {
+      generationInFlight.current = false;
+      setIsGenerating(false);
+    }
   };
 
   const handleRefine = async (text) => {
@@ -80,7 +115,7 @@ export default function Dashboard() {
   return (
     <div className="flex flex-col h-screen w-screen bg-dark-950 text-dark-100 overflow-hidden font-sans">
       {/* Top Header */}
-      <Header projectName="E-Commerce Database" />
+      <Header projectName={schemaSource === 'generated' ? 'Generated Schema' : 'E-Commerce Database (sample)'} />
 
       {/* Main Container with Sidebar + Content */}
       <div className="flex flex-1 overflow-hidden relative">
@@ -132,7 +167,12 @@ export default function Dashboard() {
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 flex-1 min-h-[440px]">
                 {/* Left: Requirement / Input Panel (4 cols on lg) */}
                 <div className="lg:col-span-4 xl:col-span-4 flex flex-col h-full min-h-[320px]">
-                  <RequirementPanel onGenerate={handleGenerate} />
+                  <RequirementPanel
+                    onGenerate={handleGenerate}
+                    isGenerating={isGenerating}
+                    error={generationError}
+                    lastResult={lastGeneration}
+                  />
                 </div>
 
                 {/* Right: ERD Workspace (8 cols on lg) */}

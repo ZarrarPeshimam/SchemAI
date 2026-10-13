@@ -95,7 +95,7 @@ export const refineSchema = (req, res, next) => {
   }
 };
 
-export const generateSchema = (req, res, next) => {
+export const generateSchema = async (req, res, next) => {
   try {
     const parseResult = generateRequestSchema.safeParse(req.body);
     if (!parseResult.success) {
@@ -103,14 +103,25 @@ export const generateSchema = (req, res, next) => {
         success: false,
         error: {
           code: "MALFORMED_REQUEST",
-          message: "Invalid request payload. 'requirement' string is required.",
+          message:
+            parseResult.error.issues[0]?.message ||
+            "Invalid request payload. 'requirement' string is required.",
           details: parseResult.error.issues,
         },
       });
     }
 
     const requirementText = parseResult.data.requirement || parseResult.data.requirements;
-    schemaService.generateSchema({ requirement: requirementText });
+    const result = await schemaService.generateSchema({ requirement: requirementText });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        schema: result.schema,
+        validation: result.validation,
+        repaired: result.repaired,
+      },
+    });
   } catch (error) {
     next(error);
   }
