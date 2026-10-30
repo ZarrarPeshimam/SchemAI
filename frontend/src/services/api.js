@@ -42,14 +42,39 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ schema, dialect }),
     }),
-  generateSchema: (requirement) =>
+  /**
+   * Model list from SchemAI's backend (which discovers it server-side from Google's REST API and caches it).
+   * `refresh: true` asks the backend to re-fetch; the backend still throttles upstream calls.
+   */
+  getModels: ({ refresh = false } = {}) => request(`/models${refresh ? '?refresh=true' : ''}`),
+  /** `model` = canonical Gemini model id captured when the request was started (the backend validates it). */
+  generateSchema: (requirement, model = null) =>
     request('/schema/generate', {
       method: 'POST',
-      body: JSON.stringify({ requirement }),
+      body: JSON.stringify({ requirement, ...(model ? { model } : {}) }),
     }),
-  refineSchema: (schema, instruction) =>
-    request('/schema/refine', {
+  /**
+   * `conversation` = { conversationId, schemaVersion } for a saved conversation. In that case the backend uses the
+   * schema stored for the conversation (authoritative) and the client schema is deliberately NOT sent. Without a
+   * conversation (sample schema / unsaved generation) the current schema is sent and nothing is persisted.
+   */
+  refineSchema: (schema, instruction, conversation = null, model = null) => {
+    const body = conversation?.conversationId
+      ? {
+          instruction,
+          conversationId: conversation.conversationId,
+          ...(Number.isInteger(conversation.schemaVersion) ? { schemaVersion: conversation.schemaVersion } : {}),
+        }
+      : { schema, instruction };
+    if (model) body.model = model;
+    return request('/schema/refine', { method: 'POST', body: JSON.stringify(body) });
+  },
+  // Conversation APIs
+  listConversations: () => request('/conversations'),
+  getConversation: (id) => request(`/conversations/${id}`),
+  addMessage: (conversationId, message) =>
+    request(`/conversations/${conversationId}/messages`, {
       method: 'POST',
-      body: JSON.stringify({ schema, instruction }),
+      body: JSON.stringify(message),
     }),
 };

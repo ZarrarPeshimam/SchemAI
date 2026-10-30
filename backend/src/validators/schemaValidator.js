@@ -128,16 +128,64 @@ export const sqlRequestSchema = z.object({
     }),
 });
 
-export const refineRequestSchema = z.object({
-  schema: schemaObjectField,
-  instruction: z
-    .string({ required_error: "Request body must contain 'instruction' property" })
-    .trim()
-    .min(1, "Instruction cannot be empty"),
-});
+// `schema` is only required for stateless refinement. When a `conversationId` is supplied the backend loads the
+// authoritative schema from the stored conversation and ignores any client-supplied schema.
+// `null` is accepted for conversationId/schemaVersion (a client that has no saved conversation sends null).
+/**
+ * Optional request-scoped Gemini model id. Only its shape is checked here (string, bounded); the controller validates it
+ * against the live compatible-model list (modelCatalogService.resolveModel) before any provider call.
+ */
+const modelField = z
+  .string({ invalid_type_error: "model must be a string" })
+  .trim()
+  .max(200, "model is too long")
+  .nullish()
+  .transform((v) => v || undefined);
+
+export const refineRequestSchema = z
+  .object({
+    schema: schemaObjectField.optional(),
+    instruction: z
+      .string({ required_error: "Request body must contain 'instruction' property" })
+      .trim()
+      .min(1, "Instruction cannot be empty")
+      .max(1000, "Instruction is too long (maximum 1000 characters)"),
+    conversationId: z
+      .string()
+      .trim()
+      .nullish()
+      .transform((v) => v || undefined),
+    model: modelField,
+    schemaVersion: z
+      .number({ invalid_type_error: "schemaVersion must be a positive integer" })
+      .int("schemaVersion must be a positive integer")
+      .min(1, "schemaVersion must be a positive integer")
+      .nullish()
+      .transform((v) => v ?? undefined),
+  })
+  .superRefine((data, ctx) => {
+    if (!data.conversationId && !data.schema) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["schema"],
+        message: "Request body must contain 'schema' property (or the 'conversationId' of a saved conversation)",
+      });
+    }
+  });
+
+/** Body of POST /conversations/:id/messages. Schema updates are deliberately NOT accepted here (see controller). */
+export const addMessageRequestSchema = z
+  .object({
+    role: z.enum(["user", "assistant"], { errorMap: () => ({ message: "role must be 'user' or 'assistant'" }) }),
+    content: z.string({ required_error: "content is required" }).min(1, "content cannot be empty").max(200_000, "content is too long"),
+    operation: z.string().trim().max(50).optional(),
+    schemaVersion: z.number().int().min(1).optional(),
+  })
+  .strict();
 
 export const generateRequestSchema = z
   .object({
+    model: modelField,
     requirement: z
       .string()
       .trim()

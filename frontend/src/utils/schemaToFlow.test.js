@@ -42,4 +42,23 @@ describe('schemaToFlow with generated-style schemas', () => {
     expect(nodes).toHaveLength(1);
     expect(edges).toHaveLength(0);
   });
+
+  it('renders a refined schema: new entity, new foreign-key attribute and new relationship all appear', () => {
+    const before = { entities: [generated.entities[1]], relationships: [] };
+    const refined = {
+      entities: [
+        { ...generated.entities[1], attributes: [pk('project_id'), fk('department_id', 'department', 'department_id', { nullable: true })] },
+        { id: 'department', name: 'Department', attributes: [pk('department_id')] },
+      ],
+      relationships: [{ id: 'department_project', source: 'department', target: 'project', name: 'runs', cardinality: '1:N' }],
+    };
+    const a = schemaToFlow(before);
+    const b = schemaToFlow(refined);
+    expect(a.nodes).toHaveLength(1);
+    expect(b.nodes.map((n) => n.id).sort()).toEqual(['department', 'project']);
+    expect(b.nodes.find((n) => n.id === 'project').data.attributes.map((x) => x.name)).toContain('department_id');
+    expect(b.edges).toHaveLength(1);
+    expect(b.edges[0]).toMatchObject({ source: 'department', target: 'project', data: { name: 'runs', cardinality: '1:N' } });
+    for (const n of b.nodes) expect(Number.isFinite(n.position.x) && Number.isFinite(n.position.y)).toBe(true);
+  });
 });

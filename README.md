@@ -427,3 +427,19 @@ A license has not yet been selected. Add a suitable open-source license file bef
 ---
 
 **SchemAI — From natural-language requirements to structured database design.**
+
+## Schema refinement (natural language)
+
+`POST /api/schema/refine` body:
+
+- Saved conversation: `{ "instruction": "...", "conversationId": "<24-hex id>", "schemaVersion": <n> }`. The backend refines the schema **stored** on the conversation (any `schema` in the body is ignored), commits the new schema, the bumped `schemaVersion` and the two history messages in one atomic, version-checked MongoDB update, and answers `409 SCHEMA_VERSION_CONFLICT` if the conversation changed in the meantime.
+- Stateless (sample schema / unsaved generation): `{ "schema": {...}, "instruction": "..." }`. Nothing is persisted (`persisted: false`).
+
+The LLM (LangChain.js + Gemini) only proposes operations (`add_entity`, `remove_entity`, `rename_entity`, `add_attribute`, `modify_attribute`, `remove_attribute`, `add_relationship`, `modify_relationship`, `remove_relationship`, `convert_many_to_many`); `applyOperations` applies them to a copy and `validateCandidate` validates the result (max 2 repair attempts). `POST /api/conversations/:id/messages` no longer accepts a `schema`.
+
+## Gemini model selection
+
+- `GET /api/models[?refresh=true]` returns `{ success, data: { models, defaultModelId, sourceUpdatedAt, stale, refreshError? } }`. The backend discovers models from Google's REST endpoint `GET https://generativelanguage.googleapis.com/v1beta/models` (server-side key, pagination, 5-minute cache, upstream calls throttled to one per 10 s, last good list kept and marked `stale` when a refresh fails). Compatibility rules live in `backend/src/services/modelCompatibility.js`.
+- `POST /api/schema/generate` and `POST /api/schema/refine` accept an optional `model` (canonical id, e.g. `gemini-x-flash`). The backend validates it against the current list (`400 MODEL_NOT_AVAILABLE`); when omitted it uses `GEMINI_MODEL` / the built-in default only if the list verifies it (otherwise `400 MODEL_NOT_SELECTED`). The model is passed explicitly to every Gemini call of that request, including repair attempts. Transient 429/500/502/503 failures are retried up to twice with backoff; the model is never switched silently.
+- The sidebar selector stores the canonical id in `localStorage` under `schemai:selectedGeminiModel`.
+- Appearing in the list does not guarantee capacity, quota or structured-output support (`capabilities.structuredOutput` is always `"unverified"`).

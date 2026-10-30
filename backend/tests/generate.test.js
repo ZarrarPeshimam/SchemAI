@@ -1,6 +1,7 @@
 import { describe, it, before, after, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import app from "../src/app.js";
+import { useTestModelCatalog, resetTestModelCatalog } from "./helpers/testModelCatalog.js";
 import { geminiService, DEFAULT_GEMINI_MODEL } from "../src/services/geminiService.js";
 import { mockSchema } from "../src/data/mockSchema.js";
 
@@ -90,6 +91,7 @@ describe("POST /api/schema/generate", () => {
   });
 
   beforeEach(() => {
+    useTestModelCatalog();
     for (const k of ["GEMINI_API_KEY", "GEMINI_MODEL", "GEMINI_TIMEOUT_MS"]) {
       savedEnv[k] = process.env[k];
       delete process.env[k];
@@ -98,6 +100,7 @@ describe("POST /api/schema/generate", () => {
   });
 
   afterEach(() => {
+    resetTestModelCatalog();
     geminiService.client = null;
     for (const [k, v] of Object.entries(savedEnv)) {
       if (v === undefined) delete process.env[k];
@@ -399,7 +402,7 @@ describe("POST /api/schema/generate", () => {
       ["400 invalid API key", providerError(400, "API key not valid. Please pass a valid API key."), 503, "LLM_AUTH_ERROR"],
       ["404 model retired", providerError(404, "This model is no longer available"), 503, "MODEL_UNAVAILABLE"],
       ["500 provider error", providerError(500, "internal"), 502, "LLM_PROVIDER_ERROR"],
-      ["503 provider overloaded", providerError(503, "overloaded"), 502, "LLM_PROVIDER_ERROR"],
+      ["503 provider overloaded", providerError(503, "overloaded"), 503, "MODEL_TEMPORARILY_UNAVAILABLE"],
       ["504 gateway timeout", providerError(504, "gateway"), 504, "LLM_TIMEOUT"],
       ["abort/timeout error", Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }), 504, "LLM_TIMEOUT"],
       ["network failure", new TypeError("fetch failed"), 502, "LLM_PROVIDER_ERROR"],
@@ -486,10 +489,10 @@ describe("POST /api/schema/generate", () => {
       assert.equal(body.data.entities.length, mockSchema.entities.length);
     });
 
-    it("POST /api/schema/refine is still an explicit, honest 501 placeholder", async () => {
+    it("POST /api/schema/refine is no longer a 501 placeholder (full coverage lives in tests/refine.test.js)", async () => {
       const { status, body } = await post({ schema: mockSchema, instruction: "Add phone to customer" }, "/schema/refine");
-      assert.equal(status, 501);
-      assert.equal(body.error.code, "FEATURE_NOT_IMPLEMENTED");
+      assert.equal(status, 503); // no GEMINI_API_KEY in tests -> typed config error, never a network call
+      assert.equal(body.error.code, "MISSING_API_KEY");
     });
 
     it("unexpected non-exposed server errors are generic (no stack, no message)", async () => {

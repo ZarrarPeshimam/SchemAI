@@ -20,11 +20,16 @@ export const errorHandler = (err, req, res, next) => {
   const statusCode = err.statusCode || (err.status && typeof err.status === "number" ? err.status : 500);
   const errorCode = err.code || (statusCode === 501 ? "FEATURE_NOT_IMPLEMENTED" : statusCode === 400 ? "BAD_REQUEST" : "INTERNAL_SERVER_ERROR");
 
+  // Unexpected server errors (500 without `expose`) never reveal their raw message or stack to clients.
+  const isUnexposedServerError = statusCode === 500 && !err.expose;
+
   const response = {
     success: false,
     error: {
-      code: errorCode,
-      message: err.message || "An unexpected server error occurred",
+      code: isUnexposedServerError ? "INTERNAL_SERVER_ERROR" : errorCode,
+      message: isUnexposedServerError
+        ? "An unexpected server error occurred"
+        : err.message || "An unexpected server error occurred",
     },
   };
 
@@ -37,7 +42,7 @@ export const errorHandler = (err, req, res, next) => {
   }
 
   // Only include stack trace in non-production environments
-  if (!isProduction && statusCode === 500) {
+  if (!isProduction && statusCode === 500 && !isUnexposedServerError) {
     response.error.stack = err.stack;
   }
 

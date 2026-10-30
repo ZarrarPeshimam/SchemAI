@@ -253,21 +253,17 @@ describe("SchemAI Backend API Suite", () => {
   // 10. (Generation endpoint tests live in tests/generate.test.js, which always injects a fake LLM client
   //      so that no test can ever reach the real Gemini API.)
 
-  // 11. Refinement placeholder returns 501 Not Implemented
-  it("POST /api/schema/refine reports that schema refinement is not yet implemented", async () => {
+  // 11. Refinement endpoint validates its payload (the LLM workflow itself is covered in tests/refine.test.js)
+  it("POST /api/schema/refine rejects a payload without an instruction", async () => {
     const res = await fetch(`${baseUrl}/schema/refine`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        schema: mockSchema,
-        instruction: "Add phone_number VARCHAR to customer",
-      }),
+      body: JSON.stringify({ schema: mockSchema }),
     });
-    assert.equal(res.status, 501);
+    assert.equal(res.status, 400);
     const body = await res.json();
     assert.equal(body.success, false);
-    assert.equal(body.error.code, "FEATURE_NOT_IMPLEMENTED");
-    assert.ok(body.error.message.includes("not yet implemented"));
+    assert.equal(body.error.code, "MALFORMED_REQUEST");
   });
 
   // 12. Malformed request handling

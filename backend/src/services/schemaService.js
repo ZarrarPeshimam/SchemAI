@@ -2,6 +2,7 @@ import { mockSchema } from "../data/mockSchema.js";
 import { validateSchemaSemantics } from "../validators/schemaValidator.js";
 import { generateSql } from "./sqlGeneratorService.js";
 import { geminiService } from "./geminiService.js";
+import { refinementService } from "./refinementService.js";
 
 /**
  * Service handling all schema operations.
@@ -31,21 +32,16 @@ class SchemaService {
   /**
    * LLM-Powered schema generation from natural-language requirements
    */
-  async generateSchema({ requirement }) {
-    return await geminiService.generateSchema(requirement);
+  async generateSchema({ requirement, model }) {
+    return await geminiService.generateSchema(requirement, { model });
   }
 
   /**
-   * Refinement placeholder service boundary.
-   * In future phases, this will invoke the LLM to modify the structured schema.
+   * Natural-language schema refinement (LangChain.js + Gemini proposes operations; deterministic code applies
+   * and validates them). Initial generation above is deliberately NOT routed through LangChain.
    */
-  refineSchema({ schema, instruction }) {
-    const error = new Error(
-      "Schema refinement is not yet implemented. LLM integration is planned for a later phase."
-    );
-    error.code = "FEATURE_NOT_IMPLEMENTED";
-    error.statusCode = 501;
-    throw error;
+  async refineSchema({ schema, instruction, model, reqId }) {
+    return await refinementService.refineSchema({ schema, instruction, model, reqId });
   }
 }
 

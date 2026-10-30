@@ -123,13 +123,15 @@ function ERDCanvas({ schema, selectedEntityId, onSelectEntity, isFullscreen, onT
       </div>
 
       {/* Canvas */}
-      <div className="flex-1 relative min-h-[360px] bg-dark-950">
-        <div className="absolute inset-0">
+      <div className="flex-1 relative w-full h-full min-h-[360px] bg-dark-950">
+        <div className="absolute inset-0 w-full h-full">
           <ReactFlow
             nodes={displayNodes}
             edges={displayEdges}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
+            className="w-full h-full"
+            style={{ width: "100%", height: "100%" }}
             onNodesChange={onNodesChange}
             onNodeClick={(_, node) => onSelectEntity(node.id)}
             onNodeDragStart={(_, node) => onSelectEntity(node.id)}
@@ -171,7 +173,7 @@ export default function ERDViewer({ schema, selectedEntityId, onSelectEntity, is
     <>
       {isFullscreen && <div className="fixed inset-0 z-40 bg-dark-950/80" onClick={onToggleFullscreen} />}
       <div
-        className={`bg-dark-900 border border-dark-750 rounded-lg flex flex-col shadow-sm overflow-hidden ${
+        className={`bg-dark-900 border border-dark-750 rounded-lg flex flex-col shadow-sm overflow-hidden w-full ${
           isFullscreen ? "fixed inset-4 z-50 rounded-xl shadow-2xl" : "h-full"
         }`}
       >

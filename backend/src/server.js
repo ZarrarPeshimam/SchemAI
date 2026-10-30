@@ -1,17 +1,27 @@
 import app from "./app.js";
 import { geminiService } from "./services/geminiService.js";
+import { connectMongo } from "./db.js";
 
 const PORT = process.env.PORT || 5000;
+
+// Connect to MongoDB
+connectMongo();
 
 const server = app.listen(PORT, () => {
   console.log(`[SchemAI Backend] Server listening on port ${PORT}`);
   console.log(`[SchemAI Backend] Health check: http://localhost:${PORT}/api/health`);
   console.log(`[SchemAI Backend] Schema endpoint: http://localhost:${PORT}/api/schema`);
-  const keyConfigured = !!process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== "your_gemini_api_key_here";
+  // Reuse the service's own key validation (throws MISSING_API_KEY). Only a boolean is logged, never the key.
+  let keyConfigured = true;
+  try {
+    geminiService.getApiKey();
+  } catch {
+    keyConfigured = false;
+  }
   console.log(
     keyConfigured
-      ? `[SchemAI Backend] Gemini: API key configured, model=${geminiService.getModel()}`
-      : "[SchemAI Backend] Gemini: GEMINI_API_KEY is NOT set - POST /api/schema/generate will return 503 until it is configured (see backend/.env.example)"
+      ? "[SchemAI Backend] Gemini: API key configured (model is chosen per request from GET /api/models)"
+      : "[SchemAI Backend] Gemini: GEMINI_API_KEY is NOT set - model discovery and POST /api/schema/generate will return 503 until it is configured (see backend/.env.example)"
   );
 });
 

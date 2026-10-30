@@ -5,12 +5,14 @@ import {
   SUPPORTED_DATA_TYPES,
   SUPPORTED_CARDINALITIES,
 } from "../validators/schemaValidator.js";
+import { createAppError } from "./appError.js";
+import { mapProviderError } from "./providerErrors.js";
+import { withRetry } from "./providerRetry.js";
+import { DEFAULT_GEMINI_MODEL, getGeminiApiKey, requireModelId } from "./geminiConfig.js";
 
-/**
- * Default model. NOTE: `gemini-2.5-flash` is scheduled for shutdown on the Gemini Developer API
- * (October 16, 2026), so it is intentionally NOT the default. Override with GEMINI_MODEL.
- */
-export const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
+// Re-exported for existing importers (tests, refinement services).
+export { createAppError, mapProviderError, DEFAULT_GEMINI_MODEL };
+
 export const DEFAULT_TIMEOUT_MS = 60_000;
 const MAX_RAW_OUTPUT_IN_REPAIR_PROMPT = 30_000;
 const MAX_REPAIR_ISSUES = 25;
@@ -102,67 +104,8 @@ Modeling rules:
 9. Self-referencing relationships (for example an employee's manager) are allowed: use a nullable foreign key to the same entity.
 10. Keep the model focused and complete for the stated requirement; avoid duplicate or redundant entities.`;
 
-/** Error carrying an HTTP status and a client-safe message. `expose` marks the message as safe to return. */
-export function createAppError(code, message, statusCode, extra = {}) {
-  const error = new Error(message);
-  error.code = code;
-  error.statusCode = statusCode;
-  error.expose = true;
-  Object.assign(error, extra);
-  return error;
-}
-
-function redact(text) {
-  let out = String(text ?? "");
-  const key = process.env.GEMINI_API_KEY;
-  if (key && key.length > 6) out = out.split(key).join("[redacted]");
-  return out.replace(/AIza[0-9A-Za-z_-]{20,}/g, "[redacted]").slice(0, 300);
-}
-
-/** Maps any provider/SDK failure to a safe, typed API error. Provider details are logged, never returned. */
-export function mapProviderError(err) {
-  if (err?.expose) return err;
-
-  const status = Number(err?.status ?? err?.statusCode ?? err?.code);
-  const name = err?.name || "";
-  const message = String(err?.message || "");
-  console.error(`[SchemAI] Gemini request failed: name=${name} status=${Number.isFinite(status) ? status : "n/a"} message=${redact(message)}`);
-
-  if (
-    name === "AbortError" ||
-    name === "TimeoutError" ||
-    status === 408 ||
-    status === 504 ||
-    /timed? ?out|timeout|deadline exceeded|ETIMEDOUT/i.test(message)
-  ) {
-    return createAppError("LLM_TIMEOUT", "The AI service took too long to respond. Please try again.", 504);
-  }
-  if (status === 429) {
-    return createAppError(
-      "RATE_LIMIT_EXCEEDED",
-      "The AI service is rate-limited or over quota right now. Please wait a moment and try again.",
-      429
-    );
-  }
-  if (status === 401 || status === 403 || (status === 400 && /api key/i.test(message))) {
-    return createAppError(
-      "LLM_AUTH_ERROR",
-      "The AI provider rejected the server's credentials. Check GEMINI_API_KEY in backend/.env.",
-      503
-    );
-  }
-  if (status === 404) {
-    return createAppError(
-      "MODEL_UNAVAILABLE",
-      "The configured AI model is unavailable. Check GEMINI_MODEL in backend/.env (older models are being retired).",
-      503
-    );
-  }
-  return createAppError("LLM_PROVIDER_ERROR", "The AI provider returned an error. Please try again.", 502);
-}
-
 /** Treat JSON `null` as an absent optional field (models sometimes emit `"references": null`). */
-function stripNulls(value) {
+export function stripNulls(value) {
   if (Array.isArray(value)) return value.map(stripNulls);
   if (value && typeof value === "object") {
     return Object.fromEntries(
@@ -182,25 +125,20 @@ function parseModelJson(text) {
 }
 
 export class GeminiService {
-  constructor(client = null) {
+  /** `retry` overrides the transient-failure retry policy (see providerRetry.js); tests inject a no-delay policy. */
+  constructor(client = null, { retry = {} } = {}) {
     this.client = client;
+    this.retry = retry;
+  }
+
+  /** Returns the configured API key or throws a typed 503 MISSING_API_KEY. Shared by generation and refinement. */
+  getApiKey() {
+    return getGeminiApiKey();
   }
 
   getClient() {
     if (this.client) return this.client;
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey || apiKey.trim() === "" || apiKey === "your_gemini_api_key_here") {
-      throw createAppError(
-        "MISSING_API_KEY",
-        "AI generation is not configured on the server. Set GEMINI_API_KEY in backend/.env and restart the backend.",
-        503
-      );
-    }
-    return new GoogleGenAI({ apiKey: apiKey.trim() });
-  }
-
-  getModel() {
-    return process.env.GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL;
+    return new GoogleGenAI({ apiKey: this.getApiKey() });
   }
 
   getTimeoutMs() {
@@ -208,21 +146,30 @@ export class GeminiService {
     return Number.isFinite(parsed) && parsed >= 1000 ? parsed : DEFAULT_TIMEOUT_MS;
   }
 
-  /** One bounded model call (no SDK-level retries). Returns the raw response text. */
-  async callModel(ai, contents) {
+  /**
+   * One bounded model call against the request-scoped `model` (a canonical id already validated by
+   * modelCatalogService.resolveModel). Transient provider failures (429/500/502/503) are retried a small, bounded number
+   * of times with backoff; each attempt has its own timeout. Returns the raw response text.
+   */
+  async callModel(ai, contents, model) {
+    const modelId = requireModelId(model);
     const timeoutMs = this.getTimeoutMs();
     try {
-      const response = await ai.models.generateContent({
-        model: this.getModel(),
-        contents,
-        config: {
-          systemInstruction: SYSTEM_INSTRUCTION,
-          responseMimeType: "application/json",
-          responseJsonSchema: GEMINI_SCHEMA_OUTPUT_SCHEMA,
-          abortSignal: AbortSignal.timeout(timeoutMs),
-          httpOptions: { timeout: timeoutMs, retryOptions: { attempts: 1 } },
-        },
-      });
+      const response = await withRetry(
+        () =>
+          ai.models.generateContent({
+            model: modelId,
+            contents,
+            config: {
+              systemInstruction: SYSTEM_INSTRUCTION,
+              responseMimeType: "application/json",
+              responseJsonSchema: GEMINI_SCHEMA_OUTPUT_SCHEMA,
+              abortSignal: AbortSignal.timeout(timeoutMs),
+              httpOptions: { timeout: timeoutMs, retryOptions: { attempts: 1 } },
+            },
+          }),
+        this.retry
+      );
       return response.text;
     } catch (err) {
       throw mapProviderError(err);
@@ -278,54 +225,35 @@ export class GeminiService {
    * requirement text -> LLM -> structured JSON -> Zod + semantic validation -> validated schema.
    * At most ONE repair attempt (so at most two model calls). Never returns an invalid schema.
    */
-  async generateSchema(requirement) {
-    // Primary attempt using configured model
-    const attempt = async (modelName) => {
-      const client = this.getClient();
-      // Temporarily override model for this attempt
-      const originalModel = process.env.GEMINI_MODEL;
-      if (modelName) process.env.GEMINI_MODEL = modelName;
-      try {
-        const firstRaw = await this.callModel(client, this.buildRequestPrompt(requirement));
-        const first = this.evaluate(firstRaw);
-        if (first.ok) {
-          return { schema: first.schema, validation: first.validation, repaired: false };
-        }
-        const repairRaw = await this.callModel(client, this.buildRepairPrompt(requirement, firstRaw, first.issues));
-        const second = this.evaluate(repairRaw);
-        if (second.ok) {
-          return { schema: second.schema, validation: second.validation, repaired: true };
-        }
-        if (second.kind === "malformed") {
-          throw createAppError(
-            "MALFORMED_LLM_OUTPUT",
-            "The AI returned a response that could not be read as a schema. Please try again or rephrase the requirement.",
-            502
-          );
-        }
-        throw createAppError(
-          "SCHEMA_VALIDATION_FAILED",
-          "The AI generated a schema that failed validation, even after one automatic correction attempt. Try rephrasing or adding detail to the requirement.",
-          422,
-          { validation: second.validation }
-        );
-      } finally {
-        // Restore original env variable
-        if (originalModel !== undefined) process.env.GEMINI_MODEL = originalModel;
-        else delete process.env.GEMINI_MODEL;
-      }
-    };
+  async generateSchema(requirement, { model } = {}) {
+    const modelId = requireModelId(model); // before any client/network work; the SAME id is used for the repair call
+    const ai = this.getClient();
 
-    try {
-      return await attempt();
-    } catch (err) {
-      // If the model is unavailable, retry with the default model
-      if (err && err.code === "MODEL_UNAVAILABLE") {
-        console.warn("[SchemAI] Falling back to default Gemini model due to unavailable configured model.");
-        return await attempt(DEFAULT_GEMINI_MODEL);
-      }
-      throw err;
+    const firstRaw = await this.callModel(ai, this.buildRequestPrompt(requirement), modelId);
+    const first = this.evaluate(firstRaw);
+    if (first.ok) {
+      return { schema: first.schema, validation: first.validation, repaired: false };
     }
+
+    const repairRaw = await this.callModel(ai, this.buildRepairPrompt(requirement, firstRaw, first.issues), modelId);
+    const second = this.evaluate(repairRaw);
+    if (second.ok) {
+      return { schema: second.schema, validation: second.validation, repaired: true };
+    }
+
+    if (second.kind === "malformed") {
+      throw createAppError(
+        "MALFORMED_LLM_OUTPUT",
+        "The AI returned a response that could not be read as a schema. Please try again or rephrase the requirement.",
+        502
+      );
+    }
+    throw createAppError(
+      "SCHEMA_VALIDATION_FAILED",
+      "The AI generated a schema that failed validation, even after one automatic correction attempt. Try rephrasing or adding detail to the requirement.",
+      422,
+      { validation: second.validation }
+    );
   }
 }
 
