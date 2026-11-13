@@ -1,27 +1,29 @@
-# SchemAI — Intelligent ER Diagram Generation and Schema Refinement
+# SchemAI — Intelligent ER Diagram Generation Using Generative AI
 
-**Turn natural-language database requirements into structured schemas and interactive Entity-Relationship Diagrams using Generative AI.**
+**Transform natural-language database requirements into structured relational schemas and interactive Entity-Relationship Diagrams using Generative AI.**
 
-SchemAI is a GenAI-powered database design platform that helps users transform plain-English requirements into structured database schemas and connected ER diagrams. It aims to simplify database modeling by using Large Language Models (LLMs) to infer entities, attributes, keys, relationships, and cardinalities.
+SchemAI is a Generative AI-powered database design assistant that helps users convert plain-English requirements into structured database schemas and interactive ER diagrams.
 
-Beyond initial generation, SchemAI is designed to support natural-language schema refinement, deterministic validation, and optional SQL generation—all based on a common structured schema representation.
+It uses Google's Gemini API to interpret database requirements and generate structured JSON representations containing entities, attributes, keys, and relationships. The generated output is then checked using deterministic validation logic before being displayed as an interactive diagram.
 
-> **Project status:** In development. Features and technologies described below may be planned rather than implemented in the current version.
+The project combines LLM-based schema generation with application-level validation to make database modelling more accessible, consistent, and easier to understand.
 
 ## Table of Contents
 
 - [Overview](#overview)
 - [Problem Statement](#problem-statement)
-- [Key Features](#key-features)
+- [Implemented Features](#implemented-features)
 - [How It Works](#how-it-works)
 - [Example](#example)
-- [Proposed Technology Stack](#proposed-technology-stack)
+- [Technology Stack](#technology-stack)
 - [System Architecture](#system-architecture)
-- [Planned API Structure](#planned-api-structure)
+- [Schema Representation](#schema-representation)
+- [Validation Strategy](#validation-strategy)
+- [Project Structure](#project-structure)
 - [Getting Started](#getting-started)
 - [Environment Configuration](#environment-configuration)
-- [Validation Strategy](#validation-strategy)
-- [Project Scope](#project-scope)
+- [API Overview](#api-overview)
+- [Testing](#testing)
 - [Limitations](#limitations)
 - [Future Enhancements](#future-enhancements)
 - [Contributing](#contributing)
@@ -29,112 +31,142 @@ Beyond initial generation, SchemAI is designed to support natural-language schem
 
 ## Overview
 
-Designing a database from natural-language requirements requires identifying entities, selecting attributes, defining primary and foreign keys, determining relationship cardinalities, and resolving many-to-many relationships.
+Designing a relational database from natural-language requirements involves identifying entities, defining attributes, selecting primary and foreign keys, and determining relationships between entities.
 
-SchemAI aims to automate much of this process through a GenAI-powered workflow.
+These tasks can be challenging, particularly for beginners who may not be familiar with database modelling concepts.
 
-Instead of generating a static diagram image, the system uses an LLM to produce a structured schema. The schema is validated by application logic and then rendered as an interactive ER diagram.
+SchemAI simplifies the initial database design process by allowing users to describe their requirements in plain English. A Gemini model interprets the description and generates a structured database schema in JSON format.
 
-This structured approach also allows the same database model to support future operations such as schema refinement, SQL generation, and data dictionary creation.
+The backend validates the generated schema using Zod and custom semantic checks. Once validated, the frontend converts the structured schema into an interactive ER diagram using React Flow.
+
+Instead of relying on an AI-generated diagram image, SchemAI uses structured data as the source of truth for visualization.
 
 ## Problem Statement
 
-Translating informal requirements into a correct relational database design can be challenging, especially for users who are unfamiliar with database modeling concepts.
+Translating informal requirements into a relational database design can be time-consuming and difficult.
 
-Common challenges include:
+Some common challenges include:
 
 - Identifying entities and their attributes from unstructured requirements.
 - Determining relationships and cardinalities.
-- Modeling many-to-many relationships.
-- Maintaining consistency between primary keys and foreign keys.
-- Updating an existing schema when requirements change.
-- Converting a database model into SQL definitions.
+- Representing primary and foreign keys correctly.
+- Modelling many-to-many relationships.
+- Checking consistency between related entities.
+- Visualizing the resulting database structure.
 
-SchemAI addresses these challenges by combining LLM-based requirement interpretation with structured schema processing and deterministic validation.
+SchemAI addresses the initial database modelling process through LLM-based requirement interpretation, structured schema generation, and deterministic validation.
 
-## Key Features
+## Implemented Features
 
-### 1. Natural-Language-to-ERD Generation
+### 1. Natural-Language-to-Schema Generation
 
-Describe a database in plain English and let the LLM propose a structured database model.
+Users can describe their database requirements in plain English.
 
-The system is designed to infer:
+The application integrates Google's Gemini API to generate structured JSON schemas containing:
 
-- Entities and attributes.
-- Primary and foreign keys.
-- One-to-one, one-to-many, and many-to-many relationships.
+- Entities and their attributes.
+- Primary key and foreign key definitions.
+- Attribute data types and constraints.
+- Relationships between entities.
 - Relationship cardinalities.
-- Associative entities where required.
 
-### 2. Interactive ER Diagram
+The generated output follows a predefined schema structure rather than returning unstructured text.
 
-Render the generated schema as a connected ER diagram rather than a static AI-generated image.
+### 2. Deterministic Schema Validation
 
-Planned diagram capabilities include:
+LLM-generated output is not trusted automatically.
 
-- Entity nodes with attribute lists.
-- Primary key and foreign key indicators.
-- Relationship edges with cardinality labels.
-- Zooming and panning.
-- Readable node positioning.
+SchemAI uses Zod and custom semantic validation rules to check the generated schema before accepting it.
 
-### 3. Natural-Language Schema Refinement
+Validation covers:
 
-Modify a previously generated schema using follow-up instructions.
-
-Example commands:
-
-- `Add salary to Employee.`
-- `Change salary to DECIMAL.`
-- `Rename employee_name to full_name.`
-- `Make email unique.`
-- `Add a Department entity.`
-- `Employees can work on multiple projects.`
-
-The system is intended to apply the requested change to the existing structured schema, validate the result, and update the ER diagram while preserving unaffected components.
-
-### 4. Deterministic Schema Validation
-
-Application-level validation is intended to detect structural problems such as:
-
-- Duplicate entity or attribute names.
-- Missing primary keys.
+- Duplicate entity and attribute names.
+- Missing or invalid identifiers.
 - Invalid foreign key references.
 - Relationships referencing nonexistent entities.
-- Inconsistent cardinalities.
-- Invalid data types or conflicting constraints.
+- Inconsistent relationship definitions.
+- Supported data types and cardinalities.
 
-LLM-generated output should be validated in code rather than trusted automatically.
+The generation pipeline also includes a bounded repair attempt when the initial model output is invalid.
 
-### 5. SQL Generation — Planned
+### 3. Interactive ER Diagram Visualization
 
-Generate SQL `CREATE TABLE` statements from the current structured schema, including appropriate primary key and foreign key constraints.
+Validated schemas are converted into interactive diagrams using React Flow (`@xyflow/react`).
 
-### 6. Data Dictionary — Planned
+Implemented visualization capabilities include:
 
-Generate documentation describing entities, attributes, data types, constraints, and their intended meanings.
+- Entity nodes with attribute details.
+- Primary key and foreign key indicators.
+- Relationship edges between entities.
+- Cardinality representation.
+- Automatic diagram layout using Dagre.
+- Zooming and panning.
+- Node selection and layout reset.
+- Full-screen diagram viewing.
+
+### 4. Gemini Model Selection
+
+Users can view and select compatible Gemini models through the application.
+
+The backend retrieves the available model catalogue from Google's API and maintains a cached model list.
+
+The implementation includes:
+
+- Model compatibility checks.
+- Backend-side model validation.
+- Cached model catalogue.
+- Refresh support.
+- Handling of temporary provider failures.
+- Explicit model selection for generation requests.
+
+### 5. Conversation Persistence
+
+SchemAI includes MongoDB-backed conversation storage using Mongoose.
+
+When MongoDB is configured, the application can store conversation information and retrieve saved conversations.
+
+The conversation model includes:
+
+- Conversation title.
+- Generated schema.
+- Messages.
+- Timestamps.
+- Schema version information.
+
+MongoDB is optional for the stateless schema-generation workflow.
 
 ## How It Works
 
-The proposed workflow separates AI-based interpretation from deterministic application logic.
+SchemAI separates AI-based interpretation from deterministic application logic.
 
 ```mermaid
 flowchart TD
-    A[Natural-Language Requirements] --> B[Backend API]
-    B --> C[LLM-Based Schema Generation]
-    C --> D[Structured JSON Schema]
-    D --> E[Deterministic Validation]
-    E -->|Valid| F[Interactive ERD Rendering]
-    E -->|Invalid| G[Error Reporting or Correction]
-    G --> E
-    F --> H[Natural-Language Refinement]
-    H --> I[Update Existing Schema]
-    I --> E
-    F --> J[Optional SQL Generation]
-    F --> K[Optional Data Dictionary]
+    A[Natural-Language Requirements] --> B[React Frontend]
+    B --> C[Express Backend API]
+    C --> D[Gemini API]
+    D --> E[Structured JSON Schema]
+    E --> F[Zod Validation]
+    F --> G{Schema Valid?}
+    G -->|No| H[Bounded Repair Attempt]
+    H --> F
+    G -->|Yes| I[Accepted Schema]
+    I --> J[React Flow Conversion]
+    J --> K[Interactive ER Diagram]
 ```
 
-The structured schema acts as the source of truth. The diagram and optional outputs are derived from that schema.
+The workflow follows these steps:
+
+1. The user enters database requirements in plain English.
+2. The frontend sends the requirements and selected Gemini model to the backend.
+3. The backend sends a structured generation prompt to Gemini.
+4. Gemini returns a JSON representation of the proposed database schema.
+5. The backend parses and validates the generated output.
+6. If validation fails, the generation service attempts a bounded repair.
+7. The validated schema is returned to the frontend.
+8. React Flow converts the schema into entity nodes and relationship edges.
+9. The user can inspect the resulting database structure through the interactive diagram.
+
+Invalid generated schemas are not returned as successful results.
 
 ## Example
 
@@ -142,12 +174,13 @@ The structured schema acts as the source of truth. The diagram and optional outp
 
 ```text
 Create a database for an employee management system.
+
 Employees belong to departments and can work on multiple projects.
 ```
 
-### Expected schema
+### Expected Schema
 
-The LLM should propose a model containing entities such as:
+The generated schema can contain entities such as:
 
 - **Employee** — employee information.
 - **Department** — department information.
@@ -164,122 +197,161 @@ Employee 1 ───── N EmployeeProject
 Project 1 ───── N EmployeeProject
 ```
 
-The exact attributes, keys, and cardinalities should be inferred from the requirements and validated by the application.
+The generated entities, attributes, keys, and relationships are represented in structured JSON and validated before visualization.
 
-### Follow-up refinement
+## Technology Stack
 
-```text
-Add salary to Employee.
-```
-
-The schema is updated to include the new attribute.
-
-```text
-Salary should be DECIMAL and cannot be null.
-```
-
-The attribute's data type and nullability are updated, and the diagram is re-rendered.
-
-```text
-Generate SQL for this schema.
-```
-
-The SQL generator uses the latest structured schema rather than generating a separate, potentially inconsistent model.
-
-## Proposed Technology Stack
-
-The following technologies are candidates for the implementation; the final stack may change during development.
-
-| Component | Proposed technology |
+| Component | Technology |
 |---|---|
-| Frontend | React |
-| Language | JavaScript |
-| ER diagram rendering | React Flow |
-| Backend API | Node.js and Express.js |
-| GenAI integration | LLM provider SDK |
-| GenAI orchestration | LangChain.js, if useful |
-| Structured data validation | Zod |
-| Schema representation | JSON |
-| Persistence | MongoDB or PostgreSQL, if needed |
-
-### GenAI integration
-
-An LLM provider will be selected based on API access, cost, model quality, and structured-output support. Potential options include Gemini, OpenAI, and compatible providers such as Groq.
-
-LangChain.js is optional. A direct SDK integration may be sufficient for the initial implementation.
-
-A separate Python service using FastAPI, LangChain, and Pydantic may be considered if a clear technical or academic requirement justifies it. Python is not required simply because the project uses Generative AI.
+| Frontend | React 18, JavaScript |
+| Build Tool | Vite |
+| Styling | Tailwind CSS |
+| Diagram Visualization | React Flow (`@xyflow/react`) |
+| Automatic Layout | Dagre (`@dagrejs/dagre`) |
+| Backend | Node.js, Express.js |
+| Generative AI | Google Gemini API (`@google/genai`) |
+| Schema Validation | Zod, custom semantic validation |
+| Database | MongoDB |
+| Database ODM | Mongoose |
+| Testing | Node.js Test Runner, Vitest, Testing Library |
 
 ## System Architecture
 
-The proposed architecture consists of the following components:
+SchemAI follows a frontend-backend architecture.
 
 **Frontend**
-- Collects database requirements and refinement instructions.
-- Displays the structured ER diagram.
-- Presents validation feedback and optional generated outputs.
+- Collects natural-language database requirements.
+- Provides Gemini model selection.
+- Displays generated schema information.
+- Renders interactive ER diagrams.
+- Displays validation information.
 
 **Backend**
-- Exposes endpoints for schema generation and refinement.
-- Coordinates LLM requests.
-- Processes and validates structured schema data.
-- Produces optional SQL and data dictionary outputs.
+- Exposes REST API endpoints.
+- Handles schema generation requests.
+- Coordinates communication with Gemini.
+- Parses and validates structured model output.
+- Manages model compatibility and provider errors.
+- Handles optional conversation persistence.
 
-**GenAI Layer**
-- Interprets natural-language requirements.
-- Proposes entities, attributes, relationships, and constraints.
-- Interprets follow-up instructions and proposes schema modifications.
+**Generative AI Layer**
+- Uses Google Gemini to interpret natural-language database requirements.
+- Produces structured JSON schema output.
 
 **Validation Layer**
-- Checks structural consistency and references.
-- Reports invalid schema elements.
-- Ensures proposed corrections are validated again.
+- Uses Zod for structural validation.
+- Applies custom semantic checks to database entities, attributes, keys, and relationships.
+- Prevents invalid generated output from being accepted.
 
-**Schema Representation**
-- Stores the current model in a consistent JSON structure.
-- Acts as the source of truth for the ER diagram and derived outputs.
+**Visualization Layer**
+- Converts accepted JSON schemas into React Flow nodes and edges.
+- Uses Dagre for automatic node positioning.
 
-## Planned API Structure
+## Schema Representation
 
-These endpoints describe the intended API design and are not necessarily implemented yet.
+The application uses a structured JSON representation as the common source of truth.
 
-| Method | Endpoint | Purpose |
-|---|---|---|
-| `POST` | `/api/schema/generate` | Generate a schema from natural-language requirements. |
-| `POST` | `/api/schema/refine` | Apply a natural-language change to an existing schema. |
-| `POST` | `/api/schema/validate` | Validate a structured schema. |
-| `POST` | `/api/schema/sql` | Generate SQL from a schema. |
-| `POST` | `/api/schema/dictionary` | Generate a data dictionary. |
+The schema consists primarily of two collections:
 
-Example generation request:
+- `entities`
+- `relationships`
 
-```json
-{
-  "requirements": "Create a database for an online bookstore."
-}
+An entity contains information such as its ID, name, description, and attributes.
+
+An attribute can contain:
+
+- Name.
+- Data type.
+- Primary key indicator.
+- Foreign key indicator.
+- Nullable constraint.
+- Unique constraint.
+- Reference information.
+
+Relationships contain source and target entities, relationship names, and cardinalities.
+
+Supported cardinalities include:
+
+- One-to-One (1:1)
+- One-to-Many (1:N)
+- Many-to-Many (N:M)
+
+The model is designed to represent many-to-many relationships through associative entities.
+
+## Validation Strategy
+
+A key design decision in SchemAI is separating LLM-generated proposals from application-level validation.
+
+The Gemini model proposes a database structure, but the application checks the output before presenting it as a valid schema.
+
+The validation process includes:
+
+1. Parsing the generated JSON.
+2. Checking required fields and supported data types.
+3. Detecting duplicate entity and attribute names.
+4. Checking primary key definitions.
+5. Verifying foreign key references.
+6. Checking relationship consistency and cardinalities.
+7. Returning validation errors when the generated schema is invalid.
+
+Validation reduces structural errors, but it cannot guarantee that the generated design perfectly captures every business requirement. Users should review the generated schema before using it in a real application.
+
+## Project Structure
+
+The project is organized into separate frontend and backend applications.
+
+```text
+SchemAI/
+│
+├── frontend/
+│   ├── src/
+│   │   ├── components/
+│   │   ├── pages/
+│   │   ├── services/
+│   │   └── utils/
+│   ├── package.json
+│   └── ...
+│
+├── backend/
+│   ├── src/
+│   │   ├── controllers/
+│   │   ├── routes/
+│   │   ├── services/
+│   │   ├── models/
+│   │   ├── validators/
+│   │   └── ...
+│   ├── package.json
+│   └── ...
+│
+├── package.json
+├── .gitignore
+└── README.md
 ```
 
-The response should contain a structured schema that the frontend can render. The exact response format will be defined during implementation.
+*Directory names are illustrative; refer to the repository for the exact current file organization.*
 
 ## Getting Started
-
-SchemAI is under development. Follow these steps once the corresponding project files and scripts have been created.
 
 ### Prerequisites
 
 - Node.js and npm.
-- An API key for the selected LLM provider.
-- Git.
+- Google Gemini API key with access to a compatible model.
+- MongoDB instance (optional, for conversation persistence).
 
-### Installation
-
-### Installation
-
-Clone the repository and install dependencies:
+### 1. Clone the Repository
 
 ```bash
 git clone https://github.com/ZarrarPeshimam/SchemAI.git
+
 cd SchemAI
+```
+
+### 2. Install Dependencies
+
+Install root dependencies if required by the workspace:
+
+```bash
+npm install
 ```
 
 Install backend dependencies:
@@ -296,150 +368,150 @@ cd ../frontend
 npm install
 ```
 
-### Running the Application
+### 3. Configure Environment Variables
 
-You can start both services independently or using root workspace scripts:
+Create a `.env` file inside the backend directory.
 
-#### 1. Backend (Express.js on port 5000)
+Refer to the environment configuration section below.
+
+### 4. Start the Backend
 
 ```bash
 cd backend
 npm run dev
-# Or from root:
-npm run dev:backend
 ```
 
-Run automated backend tests:
+The backend runs on port `5000` by default.
 
-```bash
-cd backend
-npm test
-# Or from root:
-npm run test:backend
-```
+### 5. Start the Frontend
 
-#### 2. Frontend (Vite + React on port 3000)
+Open another terminal:
 
 ```bash
 cd frontend
 npm run dev
-# Or from root:
-npm run dev:frontend
 ```
+
+The frontend runs on port `3000` by default.
+
+Open the frontend in your browser at:
+
+```text
+http://localhost:3000
+```
+
+Follow the actual package scripts if they differ from these commands.
 
 ## Environment Configuration
 
-Store API credentials in environment variables. Never expose private LLM API keys in frontend code or commit them to version control.
+The backend uses environment variables for provider credentials and application configuration.
 
-An example backend `.env` file:
+Example backend `.env`:
 
 ```env
 PORT=5000
-LLM_PROVIDER=your_provider
-LLM_API_KEY=your_api_key
+CLIENT_ORIGIN=http://localhost:3000
+
+GEMINI_API_KEY=your_gemini_api_key
+GEMINI_MODEL=your_compatible_model_id
+GEMINI_TIMEOUT_MS=180000
+
+MONGODB_URI=mongodb://localhost:27017/schemai
 ```
 
-These are illustrative variable names. The actual names must match the selected provider SDK and application configuration.
+**Important:**
 
-Add `.env` to `.gitignore`:
+- Keep API keys on the backend.
+- Never expose private API credentials in frontend code.
+- Do not commit `.env` files to GitHub.
+- MongoDB configuration is required for persistent conversation storage.
 
-```gitignore
-node_modules/
-.env
-dist/
+## API Overview
+
+The backend exposes REST endpoints under `/api`.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/api/health` | Check backend availability. |
+| GET | `/api/models` | Retrieve compatible Gemini models. |
+| GET | `/api/schema` | Retrieve the application's sample schema. |
+| POST | `/api/schema/generate` | Generate a database schema from natural-language requirements. |
+| POST | `/api/schema/validate` | Validate a structured schema. |
+| GET | `/api/conversations` | Retrieve saved conversations when MongoDB is connected. |
+| GET | `/api/conversations/:id` | Retrieve a saved conversation when MongoDB is connected. |
+
+Refer to the backend routes for the exact request and response contracts.
+
+## Testing
+
+The repository includes automated test files for different parts of the application.
+
+**Backend testing**
+
+```bash
+cd backend
+npm test
 ```
 
-Do not commit real API keys or credentials.
+**Frontend testing**
 
-## Validation Strategy
+```bash
+cd frontend
+npm test
+```
 
-SchemAI is designed to combine LLM inference with deterministic checks.
+**Frontend production build**
 
-The LLM proposes the database design, but application code should verify matters such as:
+```bash
+cd frontend
+npm run build
+```
 
-- Whether referenced entities and attributes exist.
-- Whether foreign keys reference valid attributes.
-- Whether entity and attribute names are unique.
-- Whether primary keys and constraints are represented consistently.
-- Whether relationship definitions are structurally valid.
-- Whether data types belong to the supported set.
+The test suite includes coverage for areas such as schema generation, validation, model selection, frontend rendering, and schema-to-diagram conversion.
 
-Validation cannot guarantee that a schema perfectly captures the user's intent. Ambiguous requirements may require clarification, and inferred relationships should remain reviewable by the user.
-
-## Project Scope
-
-### Minimum Viable Product
-
-- Natural-language database requirements.
-- LLM-based schema generation.
-- Structured JSON representation.
-- Entity and relationship inference.
-- Interactive ERD rendering.
-- Deterministic schema validation.
-- Natural-language schema refinement.
-- ERD updates after refinement.
-
-### Future Enhancements
-
-- SQL generation.
-- Data dictionary generation.
-- ERD export.
-- Schema revision history and undo.
-- Clarification questions for ambiguous requirements.
-- Basic normalization recommendations.
-
-### Out of Scope
-
-- Building complete business applications or ERP systems.
-- Deploying generated databases to production.
-- Generating complete application codebases.
-- Training a foundation model from scratch.
-- Complex multi-agent orchestration.
-- Unlimited conversational memory.
+Tests requiring live provider access or MongoDB may need valid environment configuration. The presence of test files does not imply that every integration test has been verified against a live service.
 
 ## Limitations
 
-- LLMs may infer incorrect entities, attributes, or cardinalities.
-- Natural-language requirements can be ambiguous or incomplete.
-- Deterministic validation catches defined structural errors but cannot prove that a model fully captures business requirements.
-- SQL generation may require dialect-specific handling.
-- Diagram readability may become challenging for large schemas.
-- The initial implementation may support only a defined subset of schema modifications and data types.
+- Gemini may infer incorrect entities, attributes, or relationships when requirements are ambiguous.
+- Validation only checks the structural and semantic rules implemented in the application.
+- A schema can pass validation and still require manual review to ensure it meets the intended business requirements.
+- The application depends on Gemini API availability, quotas, and model compatibility.
+- MongoDB is required for persistent conversation history.
+- Large schemas may make the ER diagram harder to navigate.
+- Natural-language schema refinement is not currently a reliable working feature.
+- PostgreSQL SQL generation is not currently integrated into the working application.
 
-The generated schema should be reviewed before being used in a real application.
+## Future Enhancements
+
+Potential improvements include:
+
+- Reliable natural-language schema refinement.
+- PostgreSQL SQL generation from validated schemas.
+- Data dictionary generation.
+- ER diagram export in PNG, SVG, or PDF formats.
+- Schema history comparison with undo and redo.
+- Improved clarification questions for ambiguous requirements.
+- Database normalization recommendations.
+- Support for additional SQL dialects.
+- Improved diagram layout for large schemas.
 
 ## Contributing
 
-Contributions, bug reports, and suggestions are welcome as the project develops.
+Contributions, suggestions, and bug reports are welcome.
 
-When proposing changes, prioritize:
+When contributing, prioritize:
 
 - Schema correctness.
 - Reliable validation.
-- Clear separation between AI inference and application logic.
-- Preservation of existing schema components during refinement.
-- Readable, maintainable code.
+- Separation of AI inference from application logic.
+- Maintainable frontend and backend code.
+- Clear error handling.
 
 ## License
 
-A license has not yet been selected. Add a suitable open-source license file before distributing the project under an explicit license.
+A license has not yet been selected. A suitable open-source license should be added before distributing the project under an explicit license.
 
 ---
 
 **SchemAI — From natural-language requirements to structured database design.**
-
-## Schema refinement (natural language)
-
-`POST /api/schema/refine` body:
-
-- Saved conversation: `{ "instruction": "...", "conversationId": "<24-hex id>", "schemaVersion": <n> }`. The backend refines the schema **stored** on the conversation (any `schema` in the body is ignored), commits the new schema, the bumped `schemaVersion` and the two history messages in one atomic, version-checked MongoDB update, and answers `409 SCHEMA_VERSION_CONFLICT` if the conversation changed in the meantime.
-- Stateless (sample schema / unsaved generation): `{ "schema": {...}, "instruction": "..." }`. Nothing is persisted (`persisted: false`).
-
-The LLM (LangChain.js + Gemini) only proposes operations (`add_entity`, `remove_entity`, `rename_entity`, `add_attribute`, `modify_attribute`, `remove_attribute`, `add_relationship`, `modify_relationship`, `remove_relationship`, `convert_many_to_many`); `applyOperations` applies them to a copy and `validateCandidate` validates the result (max 2 repair attempts). `POST /api/conversations/:id/messages` no longer accepts a `schema`.
-
-## Gemini model selection
-
-- `GET /api/models[?refresh=true]` returns `{ success, data: { models, defaultModelId, sourceUpdatedAt, stale, refreshError? } }`. The backend discovers models from Google's REST endpoint `GET https://generativelanguage.googleapis.com/v1beta/models` (server-side key, pagination, 5-minute cache, upstream calls throttled to one per 10 s, last good list kept and marked `stale` when a refresh fails). Compatibility rules live in `backend/src/services/modelCompatibility.js`.
-- `POST /api/schema/generate` and `POST /api/schema/refine` accept an optional `model` (canonical id, e.g. `gemini-x-flash`). The backend validates it against the current list (`400 MODEL_NOT_AVAILABLE`); when omitted it uses `GEMINI_MODEL` / the built-in default only if the list verifies it (otherwise `400 MODEL_NOT_SELECTED`). The model is passed explicitly to every Gemini call of that request, including repair attempts. Transient 429/500/502/503 failures are retried up to twice with backoff; the model is never switched silently.
-- The sidebar selector stores the canonical id in `localStorage` under `schemai:selectedGeminiModel`.
-- Appearing in the list does not guarantee capacity, quota or structured-output support (`capabilities.structuredOutput` is always `"unverified"`).
