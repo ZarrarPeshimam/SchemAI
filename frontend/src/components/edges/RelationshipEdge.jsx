@@ -1,9 +1,12 @@
 import React, { memo } from "react";
-import { BaseEdge, EdgeLabelRenderer, getSmoothStepPath } from "@xyflow/react";
+import { BaseEdge, EdgeLabelRenderer, getSmoothStepPath, useInternalNode } from "@xyflow/react";
 import { EDGE_COLOR, EDGE_COLOR_ACTIVE } from "../../utils/schemaToFlow";
+import { selfLoopPath } from "../../utils/selfLoopPath";
 
 function RelationshipEdge({
   id,
+  source,
+  target,
   sourceX,
   sourceY,
   targetX,
@@ -13,15 +16,23 @@ function RelationshipEdge({
   markerEnd,
   data,
 }) {
-  const [path, labelX, labelY] = getSmoothStepPath({
-    sourceX,
-    sourceY,
-    sourcePosition,
-    targetX,
-    targetY,
-    targetPosition,
-    borderRadius: 8,
-  });
+  // Measured height of the card, used to arc a self-referencing relationship clear of it.
+  const sourceNode = useInternalNode(source);
+  const loop =
+    source === target
+      ? selfLoopPath({ sourceX, sourceY, targetX, targetY, nodeHeight: sourceNode?.measured?.height ?? sourceNode?.height ?? 120 })
+      : null;
+  const [path, labelX, labelY] = loop
+    ? [loop.path, loop.labelX, loop.labelY]
+    : getSmoothStepPath({
+        sourceX,
+        sourceY,
+        sourcePosition,
+        targetX,
+        targetY,
+        targetPosition,
+        borderRadius: 8,
+      });
   const active = data?.highlighted;
 
   return (

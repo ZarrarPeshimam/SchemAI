@@ -36,6 +36,7 @@ export const EXCLUDED_ID_PATTERNS = [
   { pattern: /(^|-)aqa$/i, reason: "attributed-question-answering model" },
   { pattern: /robotics|computer-use/i, reason: "specialised agent model (not a plain text generator)" },
   { pattern: /^gemma/i, reason: "Gemma models reject system instructions / JSON mode on the Gemini API" },
+  { pattern: /^gemini-2\.5-pro/i, reason: "no longer available upstream (replaced by gemini-3.1-pro-preview)" },
 ];
 
 /** @returns {{ compatible: boolean, reason?: string }} */

@@ -19,7 +19,7 @@ import { refinementService } from "./refinementService.js";
 const OBJECT_ID_REGEX = /^[a-f0-9]{24}$/i;
 export const isValidConversationId = (id) => typeof id === "string" && OBJECT_ID_REGEX.test(id);
 
-const versionConflict = (currentVersion) =>
+export const versionConflict = (currentVersion) =>
   createAppError(
     "SCHEMA_VERSION_CONFLICT",
     `This conversation's schema changed since you last loaded it (current version ${currentVersion}). ` +
@@ -27,6 +27,103 @@ const versionConflict = (currentVersion) =>
     409,
     { currentVersion }
   );
+
+/**
+ * Dedicated function responsible for retrieving the latest authoritative schema using the conversation ID.
+ * Returns: { schema, schemaVersion, entities, relationships }
+ */
+export async function getCurrentSchema(conversationId, { model = Conversation, connected = isConnected } = {}) {
+  if (!isValidConversationId(conversationId)) {
+    throw createAppError("INVALID_CONVERSATION_ID", "The conversation id is not valid.", 400);
+  }
+  if (!connected()) {
+    throw createAppError(
+      "DATABASE_UNAVAILABLE",
+      "MongoDB is not connected, so this saved conversation cannot be retrieved right now.",
+      503
+    );
+  }
+  let conv;
+  try {
+    conv = await model.findById(conversationId).select("schema schemaVersion").lean();
+  } catch (err) {
+    console.warn("[SchemAI] Failed to load conversation for schema retrieval:", err?.message);
+    throw createAppError("PERSISTENCE_FAILED", "The conversation could not be loaded. Please try again.", 503);
+  }
+  if (!conv) {
+    throw createAppError("CONVERSATION_NOT_FOUND", "Conversation not found.", 404);
+  }
+  if (!conv.schema || typeof conv.schema !== "object") {
+    throw createAppError("CONVERSATION_HAS_NO_SCHEMA", "This conversation has no saved schema to refine.", 422);
+  }
+  const rawVersion = conv.schemaVersion;
+  const isLegacy = !Number.isInteger(rawVersion);
+  const schemaVersion = isLegacy ? 1 : rawVersion;
+  return {
+    schema: conv.schema,
+    schemaVersion,
+    isLegacy,
+    entities: conv.schema.entities || [],
+    relationships: conv.schema.relationships || [],
+  };
+}
+
+/**
+ * Dedicated function responsible for atomically persisting the updated schema with optimistic version checking.
+ */
+export async function saveUpdatedSchema(
+  conversationId,
+  updatedSchema,
+  expectedVersion,
+  { instruction = "", summary = "", model = Conversation, reqId = "stateless", isLegacy = false } = {}
+) {
+  const nextVersion = (Number.isInteger(expectedVersion) ? expectedVersion : 1) + 1;
+  const now = Date.now();
+  console.log(`[Refine:Commit] [${reqId}] Committing updated schema version ${nextVersion} to conversation ${conversationId}.`);
+  let updated;
+  try {
+    updated = await model
+      .findOneAndUpdate(
+        { _id: conversationId, schemaVersion: isLegacy ? null : (Number.isInteger(expectedVersion) ? expectedVersion : null) },
+        {
+          $set: { schema: updatedSchema, schemaVersion: nextVersion },
+          $push: {
+            messages: {
+              $each: [
+                { role: "user", content: instruction, operation: "refine", schemaVersion: expectedVersion, createdAt: new Date(now) },
+                { role: "assistant", content: JSON.stringify(updatedSchema), operation: "refine", schemaVersion: nextVersion, createdAt: new Date(now + 1) },
+              ],
+            },
+          },
+        },
+        { returnDocument: "after", projection: { schemaVersion: 1 } }
+      )
+      .lean();
+  } catch (err) {
+    console.warn("[SchemAI] Failed to save refined schema:", err?.message);
+    console.log(`[Refine:Commit] [${reqId}] Failed to commit schema to DB. Original schema preserved.`);
+    throw createAppError(
+      "PERSISTENCE_FAILED",
+      "The change was valid but could not be saved, so your schema was not changed. Please try again.",
+      503
+    );
+  }
+
+  if (!updated) {
+    console.log(`[Refine:Commit] [${reqId}] Concurrent conflict detected on commit for conversation ${conversationId}. Original schema preserved.`);
+    let latest;
+    try {
+      latest = await model.findById(conversationId).select("schemaVersion").lean();
+    } catch {
+      latest = null;
+    }
+    if (!latest) throw createAppError("CONVERSATION_NOT_FOUND", "Conversation not found.", 404);
+    throw versionConflict(Number.isInteger(latest.schemaVersion) ? latest.schemaVersion : 1);
+  }
+
+  console.log(`[Refine:Commit] [${reqId}] Successfully committed schema version ${nextVersion} to conversation ${conversationId}.`);
+  return { success: true, schemaVersion: nextVersion };
+}
 
 export class ConversationRefinementService {
   /** Dependencies are injectable so tests never need a real MongoDB or LLM. */
@@ -43,6 +140,21 @@ export class ConversationRefinementService {
       console.warn("[SchemAI] Failed to load conversation for refinement:", err?.message);
       throw createAppError("PERSISTENCE_FAILED", "The conversation could not be loaded. Please try again.", 503);
     }
+  }
+
+  async getCurrentSchema(conversationId) {
+    return await getCurrentSchema(conversationId, { model: this.model, connected: this.connected });
+  }
+
+  async saveUpdatedSchema(conversationId, updatedSchema, expectedVersion, options = {}) {
+    return await saveUpdatedSchema(conversationId, updatedSchema, expectedVersion, { ...options, model: this.model });
+  }
+
+  /**
+   * Refines a conversation's schema given conversationId and natural language instruction.
+   */
+  async refineSchema(conversationId, instruction, options = {}) {
+    return await this.refine({ conversationId, instruction, ...options });
   }
 
   /**
@@ -62,11 +174,8 @@ export class ConversationRefinementService {
       );
     }
 
-    const conv = await this.loadCurrent(conversationId);
-    if (!conv) throw createAppError("CONVERSATION_NOT_FOUND", "Conversation not found.", 404);
-    if (!conv.schema || typeof conv.schema !== "object") {
-      throw createAppError("CONVERSATION_HAS_NO_SCHEMA", "This conversation has no saved schema to refine.", 422);
-    }
+    const current = await this.getCurrentSchema(conversationId);
+    const conv = current;
 
     // Legacy documents may lack schemaVersion; the model default is 1.
     const storedVersion = Number.isInteger(conv.schemaVersion) ? conv.schemaVersion : 1;
@@ -81,50 +190,14 @@ export class ConversationRefinementService {
       return { ...result, conversationId, schemaVersion: storedVersion, persisted: true };
     }
 
-    const nextVersion = storedVersion + 1;
-    const now = Date.now();
-    let updated;
-    console.log(`[Refine:Commit] [${reqId}] Committing updated schema version ${nextVersion} to conversation ${conversationId}.`);
-    try {
-      updated = await this.model
-        .findOneAndUpdate(
-          // `null` also matches a legacy document that has no schemaVersion field.
-          { _id: conversationId, schemaVersion: Number.isInteger(conv.schemaVersion) ? storedVersion : null },
-          {
-            $set: { schema: result.schema, schemaVersion: nextVersion },
-            $push: {
-              messages: {
-                $each: [
-                  { role: "user", content: instruction, operation: "refine", schemaVersion: storedVersion, createdAt: new Date(now) },
-                  // Same message format as initial generation: the assistant message carries the accepted schema snapshot.
-                  { role: "assistant", content: JSON.stringify(result.schema), operation: "refine", schemaVersion: nextVersion, createdAt: new Date(now + 1) },
-                ],
-              },
-            },
-          },
-          { returnDocument: "after", projection: { schemaVersion: 1 } }
-        )
-        .lean();
-    } catch (err) {
-      console.warn("[SchemAI] Failed to save refined schema:", err?.message);
-      console.log(`[Refine:Commit] [${reqId}] Failed to commit schema to DB. Original schema preserved.`);
-      throw createAppError(
-        "PERSISTENCE_FAILED",
-        "The change was valid but could not be saved, so your schema was not changed. Please try again.",
-        503
-      );
-    }
+    const saved = await this.saveUpdatedSchema(conversationId, result.schema, storedVersion, {
+      instruction,
+      summary: result.summary?.message,
+      reqId,
+      isLegacy: conv.isLegacy,
+    });
 
-    if (!updated) {
-      console.log(`[Refine:Commit] [${reqId}] Concurrent conflict detected on commit for conversation ${conversationId}. Original schema preserved.`);
-      // Someone else committed (or the conversation vanished) while the model was working.
-      const latest = await this.loadCurrent(conversationId);
-      if (!latest) throw createAppError("CONVERSATION_NOT_FOUND", "Conversation not found.", 404);
-      throw versionConflict(Number.isInteger(latest.schemaVersion) ? latest.schemaVersion : 1);
-    }
-
-    console.log(`[Refine:Commit] [${reqId}] Successfully committed schema version ${nextVersion} to conversation ${conversationId}.`);
-    return { ...result, conversationId, schemaVersion: nextVersion, persisted: true };
+    return { ...result, conversationId, schemaVersion: saved.schemaVersion, persisted: true };
   }
 
   /** History only: a clarification does not change the schema or its version, so this is best-effort. */

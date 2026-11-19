@@ -46,6 +46,43 @@ export const getConversation = async (req, res, next) => {
   }
 };
 
+// Clone a conversation: creates a new Conversation document with the same schema and schemaVersion.
+// No Gemini call is made. The clone is a fresh test copy; the original is never touched.
+export const cloneConversation = async (req, res, next) => {
+  if (!isConnected()) {
+    return res.status(503).json({
+      success: false,
+      error: { code: 'DATABASE_UNAVAILABLE', message: 'MongoDB is not connected.' },
+    });
+  }
+  try {
+    const { id } = req.params;
+    if (!isValidConversationId(id)) return invalidIdResponse(res);
+    const source = await Conversation.findById(id).lean();
+    if (!source) {
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Conversation not found' } });
+    }
+    const clone = new Conversation({
+      title: `[TEST COPY] ${source.title}`,
+      schema: source.schema,
+      schemaVersion: source.schemaVersion,
+      messages: [],
+    });
+    await clone.save();
+    return res.status(201).json({
+      success: true,
+      data: {
+        conversationId: clone._id,
+        schemaVersion: clone.schemaVersion,
+        schema: clone.schema,
+        clonedFrom: id,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // Append a message to a conversation's history.
 // This endpoint never changes the conversation's schema or schemaVersion: the schema is only updated by a validated,
 // version-checked refinement (POST /schema/refine) or by generation. Accepting a client-supplied schema here would let a

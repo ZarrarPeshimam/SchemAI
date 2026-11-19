@@ -37,7 +37,7 @@ export default function RefinementBar({ onRefine, isRefining = false, result = n
             onChange={(e) => setText(e.target.value)}
             disabled={isRefining}
             aria-label="Refinement instruction"
-            placeholder="e.g. Add a salary attribute of type DECIMAL to Employee..."
+            placeholder="Describe a change, e.g. Make Customer email unique, or Each employee belongs to one department"
             className="w-full px-3.5 py-2 text-xs font-mono bg-dark-950 border border-dark-700 rounded-md text-dark-100 placeholder-dark-500 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition-colors disabled:opacity-60"
           />
         </div>
@@ -112,6 +112,11 @@ export default function RefinementBar({ onRefine, isRefining = false, result = n
                 ))}
               </ul>
             )}
+            <p className="text-[10px] text-dark-400" data-testid="refinement-saved">
+              {result.persisted
+                ? `Saved to this conversation${Number.isInteger(result.schemaVersion) ? ` (version ${result.schemaVersion})` : ''}.`
+                : 'Applied to the diagram only: this schema is not saved to a conversation.'}
+            </p>
           </div>
         </div>
       )}

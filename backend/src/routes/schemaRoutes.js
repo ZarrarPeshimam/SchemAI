@@ -12,6 +12,7 @@ import {
   listConversations,
   getConversation,
   addMessage,
+  cloneConversation,
 } from "../controllers/conversationController.js";
 
 const router = Router();
@@ -32,6 +33,7 @@ router.post("/schema/generate", generateSchema);
 // Conversation endpoints
 router.get("/conversations", listConversations);
 router.get("/conversations/:id", getConversation);
+router.post("/conversations/:id/clone", cloneConversation);
 router.post("/conversations/:id/messages", addMessage);
 
 export default router;

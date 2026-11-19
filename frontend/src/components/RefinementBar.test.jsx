@@ -38,4 +38,12 @@ describe('RefinementBar', () => {
     expect(onRefine).toHaveBeenCalledTimes(1);
     expect(onRefine).toHaveBeenCalledWith('Add a date_of_birth attribute of type DATE to Customer. It should be nullable.');
   });
+
+  it('tells the user whether an accepted change was saved to the conversation or only applied to the diagram', () => {
+    const base = { kind: 'applied', message: 'Done.', changes: [], repairAttempts: 0 };
+    const { rerender } = render(<RefinementBar onRefine={vi.fn()} result={{ ...base, persisted: true, schemaVersion: 4 }} />);
+    expect(screen.getByTestId('refinement-saved')).toHaveTextContent('Saved to this conversation (version 4).');
+    rerender(<RefinementBar onRefine={vi.fn()} result={{ ...base, persisted: false, schemaVersion: null }} />);
+    expect(screen.getByTestId('refinement-saved')).toHaveTextContent(/not saved to a conversation/i);
+  });
 });

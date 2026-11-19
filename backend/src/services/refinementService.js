@@ -3,9 +3,46 @@ import { createAppError } from "./geminiService.js";
 import { RefinementChain } from "./refinement/refinementChain.js";
 import { applyOperations } from "./refinement/applyOperations.js";
 import { validateCandidate } from "./refinement/refinementValidator.js";
+import { parseModelResponse } from "./refinement/operationSchema.js";
 
 /** Repair attempts allowed after the initial proposal (so at most 3 model calls per request). */
 export const MAX_REPAIR_ATTEMPTS = 2;
+
+/**
+ * Builds the refinement context from the current schema and user instruction.
+ */
+export function buildRefinementContext(schema, instruction, { previous = null, issues = [] } = {}) {
+  return {
+    schema: canonicalSchemaDef.parse(structuredClone(schema)),
+    instruction: String(instruction ?? "").trim(),
+    previous,
+    issues,
+  };
+}
+
+/**
+ * Validates a refinement proposal returned by the LLM or caller.
+ */
+export function validateRefinementProposal(proposal, schema = null) {
+  if (!proposal || typeof proposal !== "object") {
+    return { ok: false, issues: ["Proposal must be a non-null object."] };
+  }
+  return parseModelResponse(proposal);
+}
+
+/**
+ * Deterministically applies change operations to a copy of the schema.
+ */
+export function applyRefinementOperations(schema, operations, options = {}) {
+  return applyOperations(schema, operations, options);
+}
+
+/**
+ * Validates the resulting updated schema against semantic rules and SQL DDL generator.
+ */
+export function validateUpdatedSchema(originalSchema, candidateSchema) {
+  return validateCandidate(originalSchema, candidateSchema);
+}
 
 /**
  * Orchestrates: LangChain/Gemini proposal -> deterministic apply on a fresh copy -> deterministic validation,
@@ -15,6 +52,26 @@ export const MAX_REPAIR_ATTEMPTS = 2;
 export class RefinementService {
   constructor(chain = new RefinementChain()) {
     this.chain = chain;
+  }
+
+  buildRefinementContext(schema, instruction, options) {
+    return buildRefinementContext(schema, instruction, options);
+  }
+
+  validateRefinementProposal(proposal, schema) {
+    return validateRefinementProposal(proposal, schema);
+  }
+
+  applyRefinementOperations(schema, operations, options) {
+    return applyRefinementOperations(schema, operations, options);
+  }
+
+  validateUpdatedSchema(originalSchema, candidateSchema) {
+    return validateUpdatedSchema(originalSchema, candidateSchema);
+  }
+
+  async generateRefinementProposal({ schema, instruction, previous = null, issues = [], model, reqId, attempt = 0 }) {
+    return await this.chain.propose({ schema, instruction, previous, issues, model, reqId, attempt });
   }
 
   /** `model`: request-scoped canonical model id (validated by modelCatalogService.resolveModel); used for EVERY call below, including repairs. */
@@ -41,7 +98,7 @@ export class RefinementService {
       if (attempt > 0) {
         console.log(`[Refine:Repair] [${reqId}] Initiating repair attempt ${attempt}/${MAX_REPAIR_ATTEMPTS}. Supplying issues: ${JSON.stringify(issues)}`);
       }
-      const proposal = await this.chain.propose({ schema: original, instruction, previous, issues, model, reqId, attempt });
+      const proposal = await this.generateRefinementProposal({ schema: original, instruction, previous, issues, model, reqId, attempt });
 
       if (attempt > 0) {
         console.log(`[Refine:Repair] [${reqId}] Repair attempt ${attempt} response received: ok=${proposal.ok}, outcome=${proposal.response?.outcome}, repairedOperationsCount=${proposal.response?.operations?.length ?? 0}`);
@@ -73,7 +130,7 @@ export class RefinementService {
         continue;
       }
 
-      const applied = applyOperations(original, operations, { reqId });
+      const applied = this.applyRefinementOperations(original, operations, { reqId });
       if (!applied.ok) {
         if (applied.kind === "clarify") {
           console.log(`[Refine:Commit] [${reqId}] applyOperations requested clarification. Original schema preserved.`);
@@ -86,7 +143,7 @@ export class RefinementService {
         continue;
       }
 
-      const check = validateCandidate(original, applied.schema);
+      const check = this.validateUpdatedSchema(original, applied.schema);
       if (!check.valid) {
         lastFailure = "invalid";
         previous = proposal.response;

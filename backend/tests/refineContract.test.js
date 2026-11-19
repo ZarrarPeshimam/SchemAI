@@ -119,4 +119,46 @@ describe("normalizeOperations precedence and ambiguity", () => {
     assert.equal(parsed.data.operations[0].type, "TEXT");
     assert.equal(parsed.data.operations[0].attributeDefinition, undefined);
   });
+
+  it("normalizes remove_attribute with 'name' instead of 'attribute' (user reported regression)", () => {
+    const parsed = parseModelResponse(
+      proposal([{ op: "remove_attribute", entity: "customer", name: "date_of_birth" }])
+    );
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    assert.equal(parsed.data.operations[0].op, "remove_attribute");
+    assert.equal(parsed.data.operations[0].entity, "customer");
+    assert.equal(parsed.data.operations[0].attribute, "date_of_birth");
+  });
+
+  it("normalizes remove_attribute aliases like delete_attribute and attributeName", () => {
+    const parsed = parseModelResponse(
+      proposal([{ op: "delete_attribute", entity: "customer", attributeName: "date_of_birth" }])
+    );
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    assert.equal(parsed.data.operations[0].op, "remove_attribute");
+    assert.equal(parsed.data.operations[0].entity, "customer");
+    assert.equal(parsed.data.operations[0].attribute, "date_of_birth");
+  });
+
+  it("rejects remove_attribute when attribute name is completely missing", () => {
+    const parsed = parseModelResponse(
+      proposal([{ op: "remove_attribute", entity: "customer" }])
+    );
+    assert.equal(parsed.ok, false);
+    assert.match(parsed.issues[0], /remove_attribute requires 'attribute'/);
+  });
+
+  it("removes date_of_birth cleanly after it was added to Customer", () => {
+    // 1. First add date_of_birth
+    const addOp = { op: "add_attribute", entity: "customer", attributeDefinition: { name: "date_of_birth", type: "DATE", nullable: true } };
+    const schemaWithDob = applyAndCheck([addOp]).applied.schema;
+    assert.ok(attrOf(schemaWithDob, "customer", "date_of_birth"));
+
+    // 2. Now remove date_of_birth using normalized shape
+    const removeParsed = parseModelResponse(proposal([{ op: "remove_attribute", entity: "customer", name: "date_of_birth" }]));
+    assert.equal(removeParsed.ok, true);
+    const applied = applyOperations(schemaWithDob, removeParsed.data.operations);
+    assert.equal(applied.ok, true, JSON.stringify(applied));
+    assert.equal(attrOf(applied.schema, "customer", "date_of_birth"), undefined);
+  });
 });

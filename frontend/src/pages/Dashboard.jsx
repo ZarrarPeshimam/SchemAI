@@ -309,12 +309,11 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              {/* Schema Refinement Bar (temporarily hidden) */}
-              {/*
+              {/* Natural-language schema refinement. The diagram below only changes after the backend has validated
+                  (and, for a saved conversation, persisted) the change. */}
               <div className="w-full">
                 <RefinementBar onRefine={handleRefine} isRefining={isRefining} result={refineResult} disabled={isGenerating} />
               </div>
-              */}
 
               {/* Bottom Secondary Panel: Schema Entities, Relationships, Validation */}
               <div className="w-full pb-2">

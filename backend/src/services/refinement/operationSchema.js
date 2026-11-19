@@ -1,5 +1,11 @@
 import { z } from "zod";
 import { SUPPORTED_DATA_TYPES, SUPPORTED_CARDINALITIES } from "../../validators/schemaValidator.js";
+import { OPERATION_TYPES } from "./operationContract.js";
+import { normalizeOperations } from "./operationNormalizer.js";
+
+// The contract (operation names, required fields, aliases) lives in operationContract.js; the normalizer in
+// operationNormalizer.js. Re-exported here because this module has always been their public entry point.
+export { OPERATION_TYPES, normalizeOperations };
 
 /**
  * Change-operation contract between the LLM (via LangChain structured output) and the deterministic applier.
@@ -8,19 +14,6 @@ import { SUPPORTED_DATA_TYPES, SUPPORTED_CARDINALITIES } from "../../validators/
  * structured-output support for `anyOf`/unions is limited. Per-operation required fields are enforced afterwards by
  * applyOperations.js, so a model that omits a field produces a precise, repairable error instead of a silent guess.
  */
-
-export const OPERATION_TYPES = [
-  "add_entity",
-  "remove_entity",
-  "rename_entity",
-  "add_attribute",
-  "modify_attribute",
-  "remove_attribute",
-  "add_relationship",
-  "modify_relationship",
-  "remove_relationship",
-  "convert_many_to_many",
-];
 
 export const MAX_OPERATIONS = 25;
 
@@ -57,15 +50,18 @@ const relationshipDefinition = z.object({
   name: z.string().describe("short verb phrase, e.g. 'employs'"),
   cardinality: z.enum(SUPPORTED_CARDINALITIES),
   junctionName: z.string().optional().describe("N:M only: PascalCase name for the associative entity"),
+  foreignKeyName: z.string().optional().describe("1:1 / 1:N only: name for the foreign key column created on the target (e.g. 'manager_id' for an employee's manager); derived from the parent's key when omitted"),
+  mandatory: z.boolean().optional().describe("1:1 / 1:N only: true when every target row MUST have a parent ('each employee belongs to exactly one department' -> true); false when optional; omit when the user did not say"),
 });
 
 export const operationSchema = z.object({
   op: z.enum(OPERATION_TYPES),
   entity: z.string().optional().describe("existing entity id (remove_entity, rename_entity, *_attribute operations)"),
   attribute: z.string().optional().describe("existing attribute name (modify_attribute, remove_attribute)"),
-  attributeDefinition: attributeDefinition.optional().describe("add_attribute: the new column. Required for add_attribute (do not use top-level newName or type)"),
-  newName: z.string().optional().describe("modify_attribute: new column name; rename_entity: new PascalCase entity name (do not use for add_attribute)"),
-  type: z.string().optional().describe(`modify_attribute: new data type (do not use for add_attribute; put inside attributeDefinition). ${DATA_TYPE_HELP}`),
+  name: z.string().optional().describe("new attribute name for add_attribute (flat format); or use attributeDefinition.name"),
+  attributeDefinition: attributeDefinition.optional().describe("add_attribute: the new column definition object (containing name and type)"),
+  newName: z.string().optional().describe("modify_attribute: new column name; rename_entity: new PascalCase entity name"),
+  type: z.string().optional().describe(`new data type for add_attribute or modify_attribute. ${DATA_TYPE_HELP}`),
   nullable: z.boolean().optional().describe("modify_attribute: new nullability"),
   unique: z.boolean().optional().describe("modify_attribute: new uniqueness"),
   primaryKey: z.boolean().optional().describe("modify_attribute: make the column part of (true) / remove it from (false) the primary key"),
@@ -83,10 +79,14 @@ export const operationSchema = z.object({
   cardinality: z.enum(SUPPORTED_CARDINALITIES).optional().describe("modify_relationship: the new cardinality (1:1 or 1:N; N:M is not allowed here)"),
   relationshipName: z.string().optional().describe("modify_relationship: the new relationship name"),
   junctionName: z.string().optional().describe("convert_many_to_many: PascalCase name of the associative entity to create"),
+  primaryKeyAttributes: z
+    .array(z.string())
+    .optional()
+    .describe("modify_primary_key: the column names that become the COMPLETE primary key of the entity (replaces the old key)"),
   cascade: z
     .boolean()
     .optional()
-    .describe("true ONLY if the user explicitly asked to also remove dependent relationships / foreign keys"),
+    .describe("true ONLY if the user explicitly asked to also remove dependent foreign keys / relationships; never infer it"),
 }).superRefine((obj, ctx) => {
   if (obj.op === "add_attribute") {
     if (!obj.attributeDefinition) {
@@ -103,6 +103,15 @@ export const operationSchema = z.object({
   if (obj.op === "add_relationship" && !obj.relationship) {
     ctx.addIssue({ code: "custom", message: "add_relationship requires relationship" });
   }
+  if (obj.op === "remove_attribute" && !obj.attribute) {
+    ctx.addIssue({ code: "custom", message: "remove_attribute requires 'attribute'" });
+  }
+  if (obj.op === "modify_primary_key" && !(obj.primaryKeyAttributes && obj.primaryKeyAttributes.length > 0)) {
+    ctx.addIssue({
+      code: "custom",
+      message: "modify_primary_key requires primaryKeyAttributes (the list of column names that form the new primary key)",
+    });
+  }
 });
 
 /** What the model must return. `outcome` lets it ask for clarification or decline instead of guessing. */
@@ -113,71 +122,6 @@ export const modelResponseSchema = z.object({
     .describe("operations: one-sentence summary; needs_clarification: the question to ask; unsupported: the reason"),
   operations: z.array(operationSchema).optional(),
 });
-
-/**
- * Safely normalizes alternate LLM operation representations into the canonical schema.
- * Only normalizes when the meaning is unambiguous.
- * If the model omitted required fields (like name or type for add_attribute), they are NOT invented,
- * ensuring the parser rejects the operation and triggers the repair loop.
- */
-export function normalizeOperations(rawOperations) {
-  if (!Array.isArray(rawOperations)) return rawOperations;
-  return rawOperations.map((rawOp) => {
-    if (!rawOp || typeof rawOp !== "object") return rawOp;
-    const op = { ...rawOp };
-    if (op.op === "add_attribute") {
-      const existingDef = op.attributeDefinition && typeof op.attributeDefinition === "object" ? { ...op.attributeDefinition } : null;
-      // In add_attribute, models sometimes emit top-level 'newName', 'name', or 'attribute' instead of nesting in attributeDefinition.
-      // Note: newName is NOT treated as an attribute name universally; in rename_entity, it is the entity name.
-      const candidateName =
-        (typeof existingDef?.name === "string" && existingDef.name.trim()) ||
-        (typeof op.newName === "string" && op.newName.trim()) ||
-        (typeof op.name === "string" && op.name.trim()) ||
-        (typeof op.attribute === "string" && op.attribute.trim()) ||
-        null;
-      const candidateType =
-        (typeof existingDef?.type === "string" && existingDef.type.trim()) ||
-        (typeof op.type === "string" && op.type.trim()) ||
-        null;
-
-      // Only normalize when both name and type are unambiguously present.
-      // If either is missing, do not invent them; leave op unnormalized so parser rejects and repair is triggered.
-      if (candidateName && candidateType) {
-        const attrDef = {
-          name: candidateName,
-          type: candidateType,
-        };
-        // Canonical (nested) values win; stray top-level values only fill gaps. Nothing is invented.
-        const pick = (key) => (typeof existingDef?.[key] === "boolean" ? existingDef[key] : typeof op[key] === "boolean" ? op[key] : undefined);
-        for (const key of ["nullable", "unique", "primaryKey", "foreignKey"]) {
-          const value = pick(key);
-          if (value !== undefined) attrDef[key] = value;
-        }
-
-        const references =
-          existingDef?.references && typeof existingDef.references === "object"
-            ? existingDef.references
-            : op.references && typeof op.references === "object"
-              ? op.references
-              : undefined;
-        if (references !== undefined) attrDef.references = references;
-
-        op.attributeDefinition = attrDef;
-        // Strip top-level fields that belonged to the alternate representation to conform to the canonical contract
-        delete op.newName;
-        delete op.name;
-        delete op.type;
-        delete op.nullable;
-        delete op.unique;
-        delete op.primaryKey;
-        delete op.foreignKey;
-        delete op.references;
-        delete op.attribute;
-      }
-    }
-    return op;
-  });
-}
 
 /** Strict re-parse of the (null-stripped) model output. Returns { ok, data } | { ok:false, issues }. */
 export function parseModelResponse(raw) {

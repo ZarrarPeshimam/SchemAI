@@ -48,5 +48,10 @@ yarn.lock
 
 .shareignore
 SchemAI-share.zip
-SchemAI-share copy.zip
+SchemAI-share-lang.zip
 SchemAI-share copy 2.zip
+
+backend\tests\integration\log.txt
+log.txt
+
+backend\tests\integration\liveE2E.mjs

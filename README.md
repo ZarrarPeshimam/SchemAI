@@ -135,6 +135,25 @@ The conversation model includes:
 
 MongoDB is optional for the stateless schema-generation workflow.
 
+## Natural-Language Schema Refinement
+
+Users type an ordinary instruction ("Make Customer email unique", "Each employee belongs to exactly one department", "Make student_id the primary key of Student") under the diagram. The pipeline is:
+
+```text
+instruction -> load the stored schema (by conversation id, with its version)
+            -> Gemini proposes OPERATIONS (never a replacement schema)
+            -> operation normalizer (equivalent shapes -> one canonical contract)
+            -> deterministic executor on a clone of the schema
+            -> Zod + semantic + consistency validation
+            -> atomic, version-checked save (409 on a concurrent change)
+            -> frontend replaces its schema and re-lays-out the React Flow diagram
+```
+
+- The operation contract (names, required fields, aliases) lives in `backend/src/services/refinement/operationContract.js`; the normalizer, Zod schema and executor all read it.
+- Removing an entity removes the relationships attached to it; foreign keys in *other* entities (or anything that would redesign another entity's primary key) are only removed after the user explicitly agrees, otherwise the user is asked.
+- A failed, invalid or conflicting refinement never changes the saved schema or the diagram.
+- Without a saved conversation (e.g. the sample schema) a refinement is applied to the diagram only; the UI says so.
+
 ## How It Works
 
 SchemAI separates AI-based interpretation from deterministic application logic.
@@ -437,6 +456,7 @@ The backend exposes REST endpoints under `/api`.
 | GET | `/api/schema` | Retrieve the application's sample schema. |
 | POST | `/api/schema/generate` | Generate a database schema from natural-language requirements. |
 | POST | `/api/schema/validate` | Validate a structured schema. |
+| POST | `/api/schema/refine` | Apply a plain-English change to a schema. Body: `instruction`, `model`, and either `conversationId` (+ optional `schemaVersion`; the stored schema is authoritative) or `schema` (stateless, nothing is saved). Returns `applied` (with the validated schema and new version) or `needs_clarification`. Errors: `409 SCHEMA_VERSION_CONFLICT`, `404`, `503`, `422`, `429`, `504`. |
 | GET | `/api/conversations` | Retrieve saved conversations when MongoDB is connected. |
 | GET | `/api/conversations/:id` | Retrieve a saved conversation when MongoDB is connected. |
 
@@ -479,7 +499,7 @@ Tests requiring live provider access or MongoDB may need valid environment confi
 - The application depends on Gemini API availability, quotas, and model compatibility.
 - MongoDB is required for persistent conversation history.
 - Large schemas may make the ER diagram harder to navigate.
-- Natural-language schema refinement is not currently a reliable working feature.
+- Natural-language refinement depends on Gemini correctly interpreting the instruction; the application validates every result but cannot verify that it matches the user's business intent. Column defaults, check constraints, indexes and composite foreign keys are not part of the schema model and cannot be refined.
 - PostgreSQL SQL generation is not currently integrated into the working application.
 
 ## Future Enhancements

@@ -1,5 +1,6 @@
 import { SQL_IDENTIFIER_REGEX, SUPPORTED_DATA_TYPES, SUPPORTED_CARDINALITIES } from "../../validators/schemaValidator.js";
 import { toSqlTableName } from "../sqlGeneratorService.js";
+import { MODIFY_ATTRIBUTE_CHANGE_KEYS, missingRequiredFields } from "./operationContract.js";
 
 /**
  * Deterministic application of change operations to a COPY of the schema.
@@ -29,26 +30,56 @@ function listEntities(schema) {
   return schema.entities.map((e) => `${e.id} ("${e.name}")`).join(", ");
 }
 
+/**
+ * Tolerant name matching, used ONLY to resolve references to things that already exist. The canonical spelling of the
+ * existing name is always what the schema keeps. Order: exact (case-insensitive) -> same letters/digits ignoring
+ * separators and case ("order item" / "OrderItem" / "order_item") -> the same after dropping a plural "s"/"es"/"ies".
+ * A fuzzy tier is only used when it identifies exactly ONE candidate; several candidates is an error, never a guess.
+ */
+const squash = (s) => norm(s).replace(/[^a-z0-9]/g, "");
+const singularize = (s) => (s.endsWith("ies") && s.length > 4 ? `${s.slice(0, -3)}y` : /(ss|us|is)$/.test(s) ? s : /(ches|shes|xes|zes|sses)$/.test(s) ? s.slice(0, -2) : s.endsWith("s") && s.length > 2 ? s.slice(0, -1) : s);
+
+function matchOne(items, ref, keysOf) {
+  const exact = norm(ref);
+  const tiers = [
+    (k) => norm(k) === exact,
+    (k) => squash(k) === squash(ref),
+    (k) => singularize(squash(k)) === singularize(squash(ref)),
+  ];
+  for (const tier of tiers) {
+    const hits = items.filter((item) => keysOf(item).some((k) => k && tier(k)));
+    if (hits.length === 1) return { found: hits[0] };
+    if (hits.length > 1) return { ambiguous: hits };
+  }
+  return {};
+}
+
 function resolveEntity(schema, ref, what = "entity") {
   const key = norm(ref);
   if (!key) throw invalid(`A ${what} reference is required.`);
-  const found =
-    schema.entities.find((e) => norm(e.id) === key) ?? schema.entities.find((e) => norm(e.name) === key);
+  const { found, ambiguous } = matchOne(schema.entities, ref, (e) => [e.id, e.name]);
+  if (ambiguous) {
+    throw invalid(`'${ref}' could mean several entities (${ambiguous.map((e) => e.id).join(", ")}). Use the exact entity id.`);
+  }
   if (!found) throw invalid(`Entity '${ref}' does not exist. Existing entities: ${listEntities(schema)}.`);
   return found;
 }
 
+// Strict (case-insensitive) lookup: used to detect DUPLICATES, where near-matches must not be conflated.
 const findAttr = (entity, name) => entity.attributes.find((a) => norm(a.name) === norm(name));
 
 function requireAttr(entity, name) {
   if (!name) throw invalid(`An attribute name is required for entity '${entity.id}'.`);
-  const attr = findAttr(entity, name);
-  if (!attr) {
+  const { found, ambiguous } = matchOne(entity.attributes, name, (a) => [a.name]);
+  if (ambiguous) {
+    throw invalid(`'${name}' could mean several attributes of '${entity.id}' (${ambiguous.map((a) => a.name).join(", ")}). Use the exact attribute name.`);
+  }
+  if (!found) {
     throw invalid(
       `Attribute '${name}' does not exist in entity '${entity.id}'. Its attributes: ${entity.attributes.map((a) => a.name).join(", ")}.`
     );
   }
-  return attr;
+  return found;
 }
 
 /** "VARCHAR(255)" -> { type: "VARCHAR", note }, "decimal(10,2)" -> DECIMAL. Unsupported types are rejected. */
@@ -123,9 +154,10 @@ function freeRelationshipId(schema, preferred) {
 function findRelationship(schema, id) {
   const key = norm(id);
   if (!key) throw invalid("A relationship id is required.");
-  const rel = schema.relationships.find((r) => norm(r.id) === key);
-  if (!rel) throw invalid(`Relationship '${id}' does not exist. Existing: ${schema.relationships.map((r) => r.id).join(", ") || "(none)"}.`);
-  return rel;
+  const { found, ambiguous } = matchOne(schema.relationships, id, (r) => [r.id]);
+  if (ambiguous) throw invalid(`'${id}' could mean several relationships (${ambiguous.map((r) => r.id).join(", ")}). Use the exact relationship id.`);
+  if (!found) throw invalid(`Relationship '${id}' does not exist. Existing: ${schema.relationships.map((r) => r.id).join(", ") || "(none)"}.`);
+  return found;
 }
 
 /** Non-N:M relationships whose only foreign-key column to the parent is `attr` (so they would be left dangling without it). */
@@ -215,29 +247,36 @@ function addEntity(schema, op, ctx) {
   ctx.changes.push(`Added entity ${name} with ${attributes.length} attribute(s): ${attributes.map((a) => a.name).join(", ")}.`);
 }
 
+/**
+ * REMOVAL POLICY (entity)
+ *  - Relationships that touch the removed entity are removed with it: they cannot exist without it, they are part of it.
+ *  - Foreign-key columns in OTHER entities that point at it would dangle. They are columns the user did not name, so they
+ *    are removed only when the user explicitly agreed (`cascade: true`); otherwise the user is told exactly what is affected.
+ *  - A dependent foreign key that is part of another entity's PRIMARY KEY (typically an associative entity) is never
+ *    removed implicitly, even with `cascade`: that entity would have to be redesigned or removed first.
+ */
 function removeEntity(schema, op, ctx) {
   const entity = resolveEntity(schema, op.entity);
   const rels = schema.relationships.filter((r) => r.source === entity.id || r.target === entity.id);
   const refs = referencesTo(schema, entity.id).filter((r) => r.entity.id !== entity.id);
-  const hasDependents = rels.length > 0 || refs.length > 0;
-
-  if (hasDependents && !op.cascade) {
-    const parts = [];
-    if (rels.length) parts.push(`relationships: ${rels.map((r) => r.id).join(", ")}`);
-    if (refs.length) parts.push(`foreign keys: ${describeRefs(refs)}`);
-    throw clarify(
-      `Removing ${entity.name} would also affect ${parts.join(" and ")}. Do you want to remove those as well? ` +
-        `If so, say so explicitly (for example "remove ${entity.name} and its relationships and foreign keys").`
-    );
-  }
 
   for (const { entity: owner, attr } of refs) {
     if (attr.primaryKey) {
       throw clarify(
         `${owner.name}.${attr.name} is part of ${owner.name}'s primary key and references ${entity.name}. ` +
-          `Removing ${entity.name} would require redesigning ${owner.name}; please say how you want that handled.`
+          `Removing ${entity.name} would require redesigning or removing ${owner.name} as well; please say how you want that handled.`
       );
     }
+  }
+
+  if (refs.length > 0 && !op.cascade) {
+    const parts = [];
+    if (rels.length) parts.push(`relationships: ${rels.map((r) => r.id).join(", ")}`);
+    parts.push(`foreign keys: ${describeRefs(refs)}`);
+    throw clarify(
+      `Removing ${entity.name} would also affect ${parts.join(" and ")}. Do you want to remove those as well? ` +
+        `If so, say so explicitly (for example "remove ${entity.name} and its relationships and foreign keys").`
+    );
   }
 
   for (const { entity: owner, attr } of refs) {
@@ -267,7 +306,6 @@ function renameEntity(schema, op, ctx) {
 }
 
 function addAttribute(schema, op, ctx) {
-  console.log(`[Refine:Execute] [${ctx?.reqId || 'stateless'}] addAttribute executing: entity="${op.entity}", hasAttributeDefinition=${Boolean(op.attributeDefinition)}, attributeDefinition=${JSON.stringify(op.attributeDefinition)}, directOpKeys=[${Object.keys(op).join(', ')}]`);
   const entity = resolveEntity(schema, op.entity);
   if (!op.attributeDefinition) throw invalid("add_attribute requires 'attributeDefinition'.");
   const attr = buildAttribute(op.attributeDefinition, ctx.notes);
@@ -281,7 +319,7 @@ function addAttribute(schema, op, ctx) {
   ctx.changes.push(`Added attribute ${entity.name}.${attr.name} (${attr.type}${flags.length ? `, ${flags.join(", ")}` : ""}).`);
 }
 
-const MODIFY_ATTRIBUTE_KEYS = ["newName", "type", "nullable", "unique", "primaryKey", "foreignKey", "references"];
+const MODIFY_ATTRIBUTE_KEYS = MODIFY_ATTRIBUTE_CHANGE_KEYS;
 
 function dropForeignKey(schema, entity, attr, ctx, { cascade, descr }) {
   const rels = relationshipsRelyingOn(schema, entity, attr);
@@ -393,6 +431,12 @@ function removeAttribute(schema, op, ctx) {
         `If so, say so explicitly.`
     );
   }
+  if (attr.primaryKey && entity.attributes.filter((a) => a.primaryKey).length === 1) {
+    throw clarify(
+      `${entity.name}.${attr.name} is the only primary-key column of ${entity.name}. ` +
+        `Which column should become its primary key instead? (For example: "make <column> the primary key of ${entity.name}".)`
+    );
+  }
   for (const { entity: owner, attr: fk } of refs) {
     if (fk.primaryKey) {
       throw clarify(
@@ -410,21 +454,38 @@ function removeAttribute(schema, op, ctx) {
   ctx.changes.push(`Removed attribute ${entity.name}.${attr.name}.`);
 }
 
-function createForeignKey(schema, parent, child, ctx, { unique }) {
+function createForeignKey(schema, parent, child, ctx, { unique, mandatory, foreignKeyName }) {
   const pk = singlePk(parent);
+  const selfRef = parent.id === child.id;
   const existing = child.attributes.find((a) => a.foreignKey && a.references?.entity === parent.id && norm(a.references.attribute) === norm(pk.name));
   if (existing) {
     if (unique && !existing.unique) existing.unique = true;
+    if (!selfRef && mandatory !== undefined && existing.nullable === mandatory) {
+      existing.nullable = !mandatory;
+      ctx.changes.push(`Made ${child.name}.${existing.name} ${mandatory ? "NOT NULL" : "nullable"} to match the requested relationship.`);
+    }
     return existing;
   }
-  const selfRef = parent.id === child.id;
-  const base = selfRef ? `parent_${pk.name}` : findAttr(child, pk.name) ? `${parent.id}_${pk.name}` : pk.name;
+  let name;
+  if (foreignKeyName) {
+    name = String(foreignKeyName).trim();
+    if (!SQL_IDENTIFIER_REGEX.test(name)) throw invalid(`Foreign key name '${foreignKeyName}' is not a valid identifier (letters, digits, underscore).`);
+    if (findAttr(child, name)) {
+      throw invalid(`Cannot create foreign key '${name}': ${child.id} already has an attribute with that name. Choose another foreignKeyName, or use modify_attribute to turn the existing column into a foreign key.`);
+    }
+  } else {
+    const base = selfRef ? `parent_${pk.name}` : findAttr(child, pk.name) ? `${parent.id}_${pk.name}` : pk.name;
+    name = freeAttrName(child, base);
+  }
+  // Optional by default for an entity that already exists (it may already hold rows) and for self-references (the root
+  // row has no parent); NOT NULL for a brand-new entity. An explicit `mandatory` from the user wins (except self-references).
+  const nullable = selfRef ? true : mandatory !== undefined ? !mandatory : ctx.originalEntityIds.has(child.id);
   const fk = {
-    name: freeAttrName(child, base),
+    name,
     type: pk.type,
     primaryKey: false,
     foreignKey: true,
-    nullable: selfRef || ctx.originalEntityIds.has(child.id),
+    nullable,
     unique: !!unique,
     references: { entity: parent.id, attribute: pk.name },
   };
@@ -448,7 +509,9 @@ function addRelationship(schema, op, ctx) {
       ((r.source === source.id && r.target === target.id) || (def.cardinality === "N:M" && r.source === target.id && r.target === source.id))
   );
   if (duplicate) {
-    throw invalid(`A ${def.cardinality} relationship between '${source.id}' and '${target.id}' already exists ('${duplicate.id}').`);
+    throw invalid(
+      `A ${def.cardinality} relationship between '${source.id}' and '${target.id}' already exists ('${duplicate.id}'), so the requested link is already in the schema. Omit this operation (or use modify_relationship if its properties should change).`
+    );
   }
 
   if (def.cardinality === "N:M") {
@@ -457,8 +520,10 @@ function addRelationship(schema, op, ctx) {
       (e) =>
         e.id !== source.id &&
         e.id !== target.id &&
-        e.attributes.some((a) => a.foreignKey && a.references?.entity === source.id) &&
-        e.attributes.some((a) => a.foreignKey && a.references?.entity === target.id)
+        (source.id === target.id
+          ? e.attributes.filter((a) => a.foreignKey && a.references?.entity === source.id).length >= 2
+          : e.attributes.some((a) => a.foreignKey && a.references?.entity === source.id) &&
+            e.attributes.some((a) => a.foreignKey && a.references?.entity === target.id))
     );
     if (via) {
       throw clarify(
@@ -472,7 +537,11 @@ function addRelationship(schema, op, ctx) {
     return;
   }
 
-  const fk = createForeignKey(schema, source, target, ctx, { unique: def.cardinality === "1:1" });
+  const fk = createForeignKey(schema, source, target, ctx, {
+    unique: def.cardinality === "1:1",
+    mandatory: typeof def.mandatory === "boolean" ? def.mandatory : undefined,
+    foreignKeyName: def.foreignKeyName,
+  });
   const baseId = def.id ? String(def.id).trim() : `${source.id}_${target.id}`;
   if (def.id && schema.relationships.some((r) => r.id === baseId)) throw invalid(`Relationship id '${baseId}' is already used.`);
   const id = freeRelationshipId(schema, baseId);
@@ -573,6 +642,60 @@ function convertManyToMany(schema, op, ctx) {
   createJunction(schema, source, target, { relName: rel.name, junctionName: op.junctionName, baseId: rel.id, verb: "Converted" }, ctx);
 }
 
+/**
+ * modify_primary_key REPLACES the entity's primary key with exactly the named columns.
+ * Foreign keys elsewhere that referenced a column that stops being the key are re-pointed at the new (single-column) key
+ * and take its type; if that is not possible (composite new key) the user is asked instead of guessing.
+ */
+function modifyPrimaryKey(schema, op, ctx) {
+  const entity = resolveEntity(schema, op.entity);
+  const newPks = [];
+  for (const name of op.primaryKeyAttributes) {
+    const a = requireAttr(entity, name);
+    if (!newPks.includes(a)) newPks.push(a);
+  }
+  const oldPks = entity.attributes.filter((a) => a.primaryKey);
+  if (oldPks.length === newPks.length && newPks.every((a) => oldPks.includes(a))) {
+    throw invalid(`${entity.name} already has exactly this primary key (${newPks.map((a) => a.name).join(", ")}); nothing to change.`);
+  }
+
+  const dropped = oldPks.filter((a) => !newPks.includes(a));
+  const dependents = dropped.flatMap((a) => referencesTo(schema, entity.id, a.name));
+  if (dependents.length > 0 && newPks.length !== 1) {
+    throw clarify(
+      `${describeRefs(dependents)} currently reference(s) ${entity.name}'s primary key. A composite key cannot be referenced by a single foreign-key column, ` +
+        `so please say how those should be handled (or choose a single column as the new primary key).`
+    );
+  }
+
+  for (const a of dropped) a.primaryKey = false;
+  for (const a of newPks) {
+    if (!a.primaryKey) {
+      a.primaryKey = true;
+      if (a.nullable !== false) {
+        a.nullable = false;
+        ctx.changes.push(`Made ${entity.name}.${a.name} NOT NULL because it is now part of the primary key.`);
+      }
+    }
+  }
+  if (newPks.length === 1 && !newPks[0].unique) newPks[0].unique = true;
+
+  if (newPks.length === 1) {
+    const target = newPks[0];
+    for (const d of dependents) {
+      d.attr.references.attribute = target.name;
+      if (d.attr.type !== target.type) {
+        ctx.changes.push(`Changed type of ${d.entity.name}.${d.attr.name} from ${d.attr.type} to ${target.type} to match the new key ${entity.name}.${target.name}.`);
+        d.attr.type = target.type;
+      }
+      ctx.changes.push(`Re-pointed foreign key ${d.entity.name}.${d.attr.name} to the new primary key ${entity.name}.${target.name}.`);
+    }
+  }
+  ctx.changes.push(
+    `Changed the primary key of ${entity.name} from (${oldPks.map((a) => a.name).join(", ") || "none"}) to (${newPks.map((a) => a.name).join(", ")}).`
+  );
+}
+
 const HANDLERS = {
   add_entity: addEntity,
   remove_entity: removeEntity,
@@ -584,6 +707,7 @@ const HANDLERS = {
   modify_relationship: modifyRelationship,
   remove_relationship: removeRelationship,
   convert_many_to_many: convertManyToMany,
+  modify_primary_key: modifyPrimaryKey,
 };
 
 /** Re-point FK `references.entity` values written as entity names onto canonical entity ids (model tolerance). */
@@ -606,14 +730,16 @@ export function applyOperations(original, operations, { reqId = 'stateless' } = 
 
   for (let i = 0; i < operations.length; i++) {
     const op = operations[i];
-    console.log(`[Refine:Execute] [${reqId}] Operation ${i + 1}/${operations.length} about to execute: op="${op.op}", entity="${op.entity}", required 'attributeDefinition' present=${Boolean(op.attributeDefinition)}, keys=[${Object.keys(op).join(', ')}]`);
     try {
       const handler = HANDLERS[op.op];
       if (!handler) throw invalid(`Unknown operation '${op.op}'.`);
+      // The executor reads exactly the fields listed in operationContract.js (the normalizer writes the same ones).
+      const missing = missingRequiredFields(op);
+      if (missing.length) throw invalid(`${op.op} requires ${missing.map((f) => `'${f}'`).join(", ")}.`);
       handler(schema, op, ctx);
     } catch (err) {
       if (!(err instanceof OpError)) throw err;
-      console.log(`[Refine:Validate] [${reqId}] Operation ${i + 1} (${op.op}) failed validation: "${err.message}". Available keys on op: [${Object.keys(op).join(', ')}]`);
+      console.log(`[Refine:Execute] [${reqId}] Operation ${i + 1}/${operations.length} (${op.op}) rejected (${err.kind}): ${err.message}`);
       if (err.kind === "clarify") return { ok: false, kind: "clarify", question: err.message };
       return { ok: false, kind: "invalid", issues: [`Operation ${i + 1} (${op.op}) failed: ${err.message}`] };
     }
