@@ -17,8 +17,11 @@ export async function connectMongo() {
     return; // No connection; callers should handle missing connection.
   }
   try {
-    await mongoose.connect(uri, {});
-    console.log("[SchemAI] Connected to MongoDB");
+    const dbName = process.env.MONGODB_DB_NAME || "schemai";
+
+    // Strictly enforce the target database as 'schemai' (even when the URI has no database in its path)
+    await mongoose.connect(uri, { dbName });
+    console.log(`[SchemAI] Connected to MongoDB (database: "${mongoose.connection.name}")`);
   } catch (err) {
     console.error("[SchemAI] MongoDB connection error:", err);
   }
